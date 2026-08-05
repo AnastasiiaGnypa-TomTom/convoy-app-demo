@@ -164,38 +164,119 @@ grep -r "api.tomtom.com\|api.maxar.com" server/public/                   # must 
 
 ## Deploy to Azure App Service
 
-One Linux Node App Service serves both the API and the built frontend — one app, one URL.
+One Linux Node App Service serves both the API and the built frontend — one app, one URL, no CORS.
 
-### From VS Code (Azure App Service extension)
+### One command
 
-1. Create an App Service: **Linux**, runtime **Node 20 LTS** (or 22).
-2. Right-click the project root → **Deploy to Web App…** → select the app.
-3. When prompted to update the workspace config for faster deploys, accept.
-4. Add the application settings below, then restart the app.
+```bash
+az login          # once per machine
+./deploy.sh
+```
 
-### Application settings
+`deploy.sh` is idempotent: it creates whatever is missing, corrects whatever drifted, and deploys.
+Re-run it to redeploy after a commit. Defaults are overridable from the environment:
 
-Set these in **Configuration → Application settings** (or `az webapp config appsettings set`):
+```bash
+APP_NAME=convoy-demo-emea LOCATION=northeurope SKU=P0v3 ./deploy.sh
+```
 
-| Name | Value | Why |
+| Variable | Default | Notes |
 | --- | --- | --- |
-| `TOMTOM_API_KEY` | *your key* | TomTom APIs |
-| `VANTOR_API_KEY` | *your key* | Vantor Hub |
-| `SCM_DO_BUILD_DURING_DEPLOYMENT` | `true` | Runs `npm install` + `npm run build` on the server, so `server/public` is produced during deploy |
-| `WEBSITE_NODE_DEFAULT_VERSION` | `~20` | Only needed if the runtime stack is not already pinned |
+| `RESOURCE_GROUP` | `rg-convoy-demo` | |
+| `PLAN_NAME` | `plan-convoy-demo` | |
+| `APP_NAME` | `convoy-demo-tomtom-vantor` | Globally unique; the script checks and tells you if taken |
+| `LOCATION` | `westeurope` | |
+| `SKU` | `B1` | Floor that supports Always On — see below |
+| `RUNTIME` | `NODE:22-lts` | |
 
-Do **not** set `PORT` — App Service injects it.
+### What it does, and why
 
-**Startup command:** leave blank. App Service runs `npm start`, which is what this app expects.
+- **Refuses to run on a dirty working tree.** What deploys must correspond to a commit.
+- **Builds the client locally and ships a prebuilt package** with Oryx's server-side build turned
+  *off* (`SCM_DO_BUILD_DURING_DEPLOYMENT=false`). The artifact is then exactly what was tested: no
+  build variance on the host, no Vite tree installed on the App Service, and a broken build fails
+  on your machine rather than producing a live site serving the 503 "not built" placeholder.
+  Measured artifact: ~674 files, 5.6 MB.
+- **Packages by allowlist, not denylist.** Contents come from `git archive HEAD server package.json
+  package-lock.json` — tracked files only — plus `server/public`. An earlier hand-written `zip -x`
+  denylist had already drifted from `.gitignore` and would have shipped the 328 KB Vantor imagery
+  sample in `server/scripts`. An allowlist makes that impossible rather than merely unlikely.
+- **Never prints a key.** Values are read from `.env` and passed as application settings; every `az`
+  call that would echo them uses `--output none`. Without that,
+  `az webapp config appsettings set` prints the full settings list, keys included, into your
+  scrollback and any CI log.
+- **Verifies after deploying**, including re-downloading every served JS bundle and grepping it for
+  both key values. A leak fails the deploy loudly.
 
-### Notes
+Do **not** set `PORT` — App Service injects it, and `lib/env.js` reads `process.env` before `.env`,
+so the platform value wins with no code change.
 
-- `server/public/` and `node_modules/` are git-ignored. The build runs on the server, which is why
-  `SCM_DO_BUILD_DURING_DEPLOYMENT=true` matters. If you would rather ship a prebuilt frontend,
-  run `npm run build` locally and remove `server/public/` from `.gitignore`.
-- Geolocation needs a secure context. It works on the App Service HTTPS URL and on `localhost`,
-  but not over plain HTTP. Without it the app simply asks the user to click a start point.
-- No authentication by design — anyone with the link can use it.
+**Why B1 and not the free tier.** F1 has no Always On, so every visitor after an idle period waits
+through a cold start, and its 60 CPU-minute daily quota does not survive imagery proxying. B1 is
+roughly €13/month.
+
+### Redeploying from GitHub instead
+
+`.github/workflows/deploy.yml` deploys on every push to `main`. It needs the app to exist first, so
+run `deploy.sh` once, then:
+
+```bash
+az webapp deployment list-publishing-profiles \
+  -g rg-convoy-demo -n convoy-demo-tomtom-vantor --xml
+```
+
+Store that XML as the repo secret `AZURE_WEBAPP_PUBLISH_PROFILE`. The vendor keys are deliberately
+*not* in CI — the build does not need them, and putting them there would copy both secrets into a
+second system for no benefit.
+
+---
+
+## Public access: what is and is not safe
+
+The default `https://<app>.azurewebsites.net` hostname is public internet with a managed TLS
+certificate. **No VPN, no tenant membership, nothing to install.** A side benefit: geolocation only
+works in a secure context, so "use my location" works there but not over plain HTTP.
+
+**What is safe.** The keys are server-side only and verified absent from every served bundle on each
+deploy. There is no login, no cookie, no database and no stored PII, so there is nothing to breach.
+HTTPS is enforced, FTP is disabled, TLS 1.2 is the floor, and the error handler returns a generic
+message so a vendor URL — which carries a key — can never surface client-side.
+
+**What needed fixing, and now is.** The keys being safe protects the *credentials*, not the *quota
+behind them*. Unauthenticated, every `/api/*` route is an open relay to TomTom and Vantor billed to
+our accounts, and imagery is the expensive path. `lib/rateLimit.js` applies per-IP token buckets,
+sized against the app's own measured traffic: a full demo session including 40 s of driving at 4×
+issues 391 API requests and triggers **zero** rejections, while a scripted tile pull is cut off
+after ~220. `robots.txt` disallows all crawlers, since the POI layers are not public reference data.
+
+**What remains a judgement call, not a bug.**
+
+- **Vantor imagery redistribution.** Serving Maxar imagery to an anonymous audience is a licensing
+  question for whoever owns the contract. Not verifiable from the code.
+- **The defence and critical-infrastructure POI layers.** Every POI comes from licensed TomTom data
+  and each is individually public, but an open map branded TomTom × Vantor showing military sites is
+  a communications decision.
+- **Keep the change-detection seam unimplemented while the URL is open.** As noted in
+  `server/index.js`, `POST /monitoring/v1/monitors` returns 400 rather than 403 on this key, meaning
+  writes are permitted. Exposing monitor creation anonymously would let strangers create monitors on
+  the customer's Vantor account. Nothing calls it today.
+
+### Restricting access without a VPN
+
+Rate limiting bounds abuse but does not control *who* can look. To require a Microsoft sign-in —
+still no VPN, and external guests can be invited per email address:
+
+```bash
+az webapp auth microsoft update -g rg-convoy-demo -n convoy-demo-tomtom-vantor \
+  --client-id <app-registration-id> \
+  --issuer https://login.microsoftonline.com/<tenant-id>/v2.0
+az webapp auth update -g rg-convoy-demo -n convoy-demo-tomtom-vantor \
+  --enabled true --action RedirectToLoginPage
+```
+
+This is a platform feature: no application code changes, and it closes both the quota-abuse and
+imagery-licensing questions at once, because viewers become named identities rather than the open
+internet.
 
 ---
 
