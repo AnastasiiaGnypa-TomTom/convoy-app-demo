@@ -1,0 +1,22 @@
+{
+  "name": "convoy-app",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "TomTom + Vantor convoy routing demo",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "probe:vantor": "node server/scripts/probe-vantor.js",
+    "start": "node server/index.js",
+    "build": "npm --prefix client install && npm --prefix client run build",
+    "dev": "node server/index.js",
+    "verify:pois": "node server/scripts/verify-poi-categories.js",
+    "test:pois": "node server/scripts/test-poi-layers.js"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "compression": "^1.7.5"
+  }
+}

@@ -1,0 +1,790 @@
+import { useEffect, useRef, useState } from 'react';
+import maplibregl from 'maplibre-gl';
+import 'maplibre-gl/dist/maplibre-gl.css';
+import {
+  LAYERS,
+  bindAlternativeClicks,
+  createEndpointMarker,
+  ensureRouteLayers,
+  fitToRoute,
+  setCongestion,
+  setRouteData,
+  setSelectedRoute,
+} from '../lib/routeLayers.js';
+import {
+  ensureImageryLayers,
+  ensureIncidentLayers,
+  ensureTrafficLayer,
+  setImageryMode,
+  setIncidentData,
+  setLayerVisible,
+  setTrafficVisible,
+} from '../lib/overlays.js';
+import {
+  bindPoiClicks,
+  ensurePoiLayers,
+  setPoiData,
+  setPoiVisible,
+} from '../lib/poiLayers.js';
+import { createVehiclePuckElement } from '../lib/vehicleIcons.js';
+import {
+  createVehicleMarker,
+  ensureNavLayers,
+  setNavProgress,
+  setNavVisible,
+} from '../lib/navLayers.js';
+import { CAMERA_MODES, NAV_ZOOM, createCameraController } from '../lib/cameraController.js';
+import { applyImageryFirst, restoreStreetStyle } from '../lib/imageryFirstStyle.js';
+import { disableBuildings3D, enableBuildings3D, hasBuildingsLayer } from '../lib/buildings3d.js';
+import {
+  DEM_SOURCE_ID,
+  HILLSHADE_LAYER,
+  STEEP_LAYER,
+  ensureDemSource,
+  ensureHillshade,
+  ensureSteepLayer,
+  setLayerVisibility,
+  setSteepData,
+} from '../lib/terrainLayers.js';
+import { buildRouteIndex } from '../lib/navigation.js';
+import {
+  ensureStructureLayers,
+  setStructuresVisible,
+  setRouteStructures,
+  findRouteStructures,
+  routeStructuresToGeoJSON,
+} from '../lib/roadStructures.js';
+import { END_COLOR, START_COLOR } from './RoutePanel.jsx';
+
+/**
+ * The MapLibre canvas plus everything drawn on it.
+ *
+ * React owns the data; a set of effects reconciles the map to it. The map instance
+ * itself lives for the component's lifetime so later steps (imagery overlay,
+ * terrain) can attach to an initialised map rather than rebuilding it.
+ */
+export default function MapView({
+  config,
+  routeData,
+  selectedIndex,
+  start,
+  end,
+  picking,
+  flyTo,
+  imageryModes,
+  activeImageryMode,
+  trafficSource,
+  incidents,
+  imageryOn,
+  trafficOn,
+  is3D,
+  terrainSource,
+  poiCategories,
+  poiData,
+  poiOn,
+  structuresOn,
+  onRouteStructures,
+  navigating,
+  motionRef,
+  navSplit,
+  followCamera,
+  navSource,
+  recenterRequest,
+  cameraMode,
+  profileId,
+  terrainSourceDef,
+  terrainAvailable,
+  exaggeration,
+  hillshadeOn,
+  steepGeoJSON,
+  onTerrainReady,
+  onUserPan,
+  onMapLongPress,
+  onReady,
+  onError,
+  onSelectRoute,
+  onMapClick,
+  onCenterChange,
+  onBoundsChange,
+  onCongestionCount,
+  onZoomChange,
+  onPoiClick,
+  captureDate,
+  buildings3D,
+  onBuildingsAvailable,
+}) {
+  const containerRef = useRef(null);
+  const mapRef = useRef(null);
+  /*
+   * Ready is state, not a ref, on purpose: the route can resolve before the map
+   * fires `load` (routinely on mobile, where WebGL init is slower). A ref would
+   * let the layer effect bail out and never re-run, leaving the route invisible
+   * even though the panel lists it. State re-runs the effect once the map is up.
+   */
+  const [ready, setReady] = useState(false);
+  /** The single camera owner. Nothing else may move the camera. */
+  const cameraRef = useRef(null);
+  const enteredNavRef = useRef(false);
+  /*
+   * Distinguishes our own camera moves from the user dragging.
+   *
+   * Without this, every follow-camera easeTo would look like a user pan and would
+   * immediately switch follow mode off — the camera would never follow at all.
+   */
+  const programmaticMoveRef = useRef(false);
+  const markersRef = useRef({ start: null, end: null });
+  // Effects need the latest callbacks without re-running on every render.
+  const handlers = useRef({});
+  handlers.current = {
+    onSelectRoute,
+    onMapClick,
+    onCenterChange,
+    onError,
+    onBoundsChange,
+    onCongestionCount,
+    onZoomChange,
+    onUserPan,
+    onMapLongPress,
+    onPoiClick,
+    onTerrainReady,
+    onBuildingsAvailable,
+    onRouteStructures,
+  };
+  // Only refit the camera when the geometry changes, not when the selection does.
+  const lastFitKey = useRef(null);
+
+  /* ------------------------------------------------------------ init map */
+  useEffect(() => {
+    if (!config || mapRef.current) return;
+
+    let map;
+    try {
+      map = new maplibregl.Map({
+        container: containerRef.current,
+        style: config.map.styleUrl,
+        center: config.map.center,
+        zoom: config.map.zoom,
+        maxPitch: config.map.maxPitch ?? 75,
+        attributionControl: { compact: true },
+        pixelRatio: Math.min(window.devicePixelRatio || 1, 2),
+        /*
+         * A big tile cache is what stops the drive re-fetching imagery it passed a
+         * minute ago. Default is small enough that a guidance run evicts tiles it is
+         * about to need again on the return leg.
+         */
+        maxTileCacheSize: 1200,
+        // Crisp on arrival rather than fading in soft — matters at driving speed.
+        fadeDuration: 0,
+      });
+    } catch (err) {
+      handlers.current.onError?.(`Map failed to initialise: ${err.message}`);
+      return;
+    }
+
+    mapRef.current = map;
+    cameraRef.current = createCameraController(map);
+
+    map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), 'top-right');
+    map.addControl(new maplibregl.ScaleControl({ maxWidth: 120, unit: 'metric' }), 'bottom-left');
+    map.addControl(
+      new maplibregl.GeolocateControl({ trackUserLocation: false, showAccuracyCircle: true }),
+      'top-right',
+    );
+
+    let unbindAlternatives = () => {};
+
+    map.on('load', () => {
+      ensureRouteLayers(map);
+      unbindAlternatives = bindAlternativeClicks(map, (i) => handlers.current.onSelectRoute?.(i));
+
+      /*
+       * Publish the initial camera immediately.
+       *
+       * These used to be emitted only from `moveend`, which never fires if nothing
+       * moves the camera — exactly what happens when geolocation is denied. Bounds
+       * then stayed null and anything keyed off them (infrastructure POIs, traffic
+       * incidents) never requested data at all: no error, just a permanently empty
+       * layer.
+       */
+      const b = map.getBounds();
+      handlers.current.onBoundsChange?.([b.getWest(), b.getSouth(), b.getEast(), b.getNorth()]);
+      handlers.current.onZoomChange?.(map.getZoom());
+      const c = map.getCenter();
+      handlers.current.onCenterChange?.({ lat: c.lat, lon: c.lng });
+
+      // Tell the app whether the basemap actually carries extrudable buildings.
+      handlers.current.onBuildingsAvailable?.(hasBuildingsLayer(map));
+      setReady(true);
+      // Exposed for the acceptance tests; harmless in the demo build.
+      if (typeof window !== 'undefined') window.__map = map;
+      onReady?.(map);
+    });
+
+    map.on('click', (e) => {
+      // Route-line clicks are handled by their own layer listener; this is for
+      // choosing start/end points on the map.
+      handlers.current.onMapClick?.({ lat: e.lngLat.lat, lon: e.lngLat.lng });
+    });
+
+    /*
+     * A real drag or zoom by the user breaks camera follow, as in any nav app.
+     *
+     * Only `dragstart` and `wheel` count. `rotatestart` and `pitchstart` were tried
+     * and removed: the follow camera's own easeTo changes bearing and pitch every
+     * update, so those events fire constantly from our own animation and the camera
+     * instantly un-followed itself — pressing "Re-centre" appeared to do nothing.
+     * Drag and wheel are pointer-driven and cannot be triggered by easeTo.
+     */
+    map.on('wheel', () => handlers.current.onUserPan?.());
+    /*
+     * Pointer drags are detected on the canvas rather than via MapLibre's
+     * `dragstart`, because the follow camera runs an easeTo every position update
+     * and an in-flight camera animation swallows that event — the user could pan
+     * during navigation and the map would snap straight back with no way out.
+     * A raw pointer-move threshold fires regardless of what the camera is doing.
+     */
+    const canvas = map.getCanvas();
+    let panOrigin = null;
+    canvas.addEventListener('pointerdown', (e) => {
+      panOrigin = { x: e.clientX, y: e.clientY };
+    });
+    canvas.addEventListener('pointermove', (e) => {
+      if (!panOrigin) return;
+      if (Math.hypot(e.clientX - panOrigin.x, e.clientY - panOrigin.y) > 12) {
+        handlers.current.onUserPan?.();
+        panOrigin = null;
+      }
+    });
+    for (const ev of ['pointerup', 'pointercancel']) {
+      canvas.addEventListener(ev, () => {
+        panOrigin = null;
+      });
+    }
+
+    /*
+     * Long-press (or right-click) drops a pin.
+     *
+     * Cancelled only once the pointer moves more than a few pixels — a strict
+     * "any mousemove cancels" rule never fires at all, because the browser emits
+     * move events even when the pointer is effectively stationary.
+     */
+    let pressTimer = null;
+    let pressOrigin = null;
+    const clearPress = () => {
+      if (pressTimer) clearTimeout(pressTimer);
+      pressTimer = null;
+      pressOrigin = null;
+    };
+    map.on('mousedown', (e) => {
+      if (e.originalEvent.button !== 0) return;
+      pressOrigin = { x: e.point.x, y: e.point.y };
+      pressTimer = setTimeout(() => {
+        handlers.current.onMapLongPress?.({ lat: e.lngLat.lat, lon: e.lngLat.lng });
+        clearPress();
+      }, 450);
+    });
+    map.on('mousemove', (e) => {
+      if (!pressOrigin) return;
+      if (Math.hypot(e.point.x - pressOrigin.x, e.point.y - pressOrigin.y) > 8) clearPress();
+    });
+    for (const ev of ['mouseup', 'dragstart', 'zoomstart']) map.on(ev, clearPress);
+
+    map.on('contextmenu', (e) =>
+      handlers.current.onMapLongPress?.({ lat: e.lngLat.lat, lon: e.lngLat.lng }),
+    );
+
+    map.on('moveend', () => {
+      programmaticMoveRef.current = false;
+      const c = map.getCenter();
+      handlers.current.onCenterChange?.({ lat: c.lat, lon: c.lng });
+      const b = map.getBounds();
+      handlers.current.onBoundsChange?.([b.getWest(), b.getSouth(), b.getEast(), b.getNorth()]);
+      handlers.current.onZoomChange?.(map.getZoom());
+    });
+
+    map.on('error', (e) => {
+      const message = e?.error?.message || 'unknown map error';
+      if (/style|glyph|sprite/i.test(message)) handlers.current.onError?.(`Map: ${message}`);
+      else console.warn('[map]', message);
+    });
+
+    const observer = new ResizeObserver(() => map.resize());
+    observer.observe(containerRef.current);
+
+    return () => {
+      observer.disconnect();
+      unbindAlternatives();
+      map.remove();
+      mapRef.current = null;
+      setReady(false);
+      markersRef.current = { start: null, end: null };
+    };
+  }, [config, onReady]);
+
+  /* -------------------------------------------------------- route layers */
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !ready) return;
+
+    const fc = routeData?.routes;
+    setRouteData(map, fc);
+    setSelectedRoute(map, selectedIndex ?? 0);
+
+    // Refit only when the geometry itself is new.
+    const key = fc?.features?.length
+      ? `${fc.features.length}:${fc.features[0].geometry.coordinates.length}:${JSON.stringify(fc.features[0].geometry.coordinates[0])}`
+      : null;
+    /*
+     * Never re-frame while navigating. Pressing "Go" sets the destination, which
+     * produces new geometry and used to fire a fitBounds to the whole route at the
+     * exact moment the nav camera was moving in — the reported zoom-out-then-snap.
+     */
+    if (key && key !== lastFitKey.current && !navigating) {
+      lastFitKey.current = key;
+      fitToRoute(map, fc);
+    } else if (key) {
+      lastFitKey.current = key;
+    }
+    if (!key) lastFitKey.current = null;
+  }, [routeData, selectedIndex, ready, navigating]);
+
+  /* ------------------------------------------------------------ markers */
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !ready) return;
+
+    for (const [which, point, color, title] of [
+      ['start', start, START_COLOR, 'Start'],
+      ['end', end, END_COLOR, 'Destination'],
+    ]) {
+      const existing = markersRef.current[which];
+      if (!point) {
+        existing?.remove();
+        markersRef.current[which] = null;
+        continue;
+      }
+      if (existing) {
+        existing.setLngLat([point.lon, point.lat]);
+      } else {
+        const marker = createEndpointMarker({ color, title });
+        marker.setLngLat([point.lon, point.lat]).addTo(map);
+        markersRef.current[which] = marker;
+      }
+    }
+  }, [start, end, ready]);
+
+  /* --------------------------------------------------------- overlay setup */
+  // Added once the sources are known. Both start hidden; the effects below
+  // control visibility.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !ready) return;
+    try {
+      if (imageryModes?.length) ensureImageryLayers(map, imageryModes);
+      if (trafficSource) {
+        ensureTrafficLayer(map, trafficSource, LAYERS.altCasing);
+        ensureIncidentLayers(map);
+      }
+    } catch (err) {
+      console.warn('[overlays]', err.message);
+    }
+  }, [ready, imageryModes, trafficSource]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !ready || !imageryModes?.length) return;
+    setImageryMode(map, activeImageryMode, Boolean(imageryOn));
+
+    /*
+     * Imagery on = imagery-first styling.
+     *
+     * The Orbis street style has 20 fills and 69 lines. Over satellite imagery that
+     * reads as clutter: land-use polygons tint the ground, building footprints sit
+     * on real rooftops, admin hairlines cross everything and every road carries a
+     * bright casing. Hiding the layers the imagery already shows better is what
+     * makes this look like the Vantor Hub rather than a street map with a photo
+     * behind it. Restored exactly when imagery goes off.
+     */
+    if (imageryOn) applyImageryFirst(map);
+    else restoreStreetStyle(map);
+  }, [imageryOn, activeImageryMode, ready, imageryModes]);
+
+  /*
+   * Selecting a temporal capture re-points the imagery tiles at that date.
+   *
+   * The tile URL carries ?date=, which the proxy turns into a CQL filter on
+   * acquisitionDate — so this genuinely re-renders the imagery rather than
+   * relabelling it. setTiles() is used so the source is re-pointed in place instead
+   * of being removed and re-added, which would flash the layer.
+   */
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !ready || !imageryModes?.length) return;
+    for (const mode of imageryModes) {
+      const src = map.getSource(`vantor-imagery-${mode.id}`);
+      if (!src?.setTiles) continue;
+      const base = `${window.location.origin}/api/imagery/${mode.id}/{z}/{x}/{y}.png`;
+      src.setTiles([captureDate ? `${base}?date=${encodeURIComponent(captureDate)}` : base]);
+    }
+  }, [captureDate, ready, imageryModes]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !ready) return;
+    setTrafficVisible(map, Boolean(trafficOn));
+    setLayerVisible(map, LAYERS.congestion, Boolean(trafficOn));
+  }, [trafficOn, ready, trafficSource]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !ready) return;
+    setIncidentData(map, incidents);
+  }, [incidents, ready]);
+
+  /* ------------------------------------------------ bridges & tunnels */
+  /*
+   * These come from the basemap's own road data, so they only exist while the vector
+   * basemap is loaded. Re-added whenever the style changes (switching to imagery and
+   * back rebuilds the style, which drops added layers).
+   */
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !ready) return;
+
+    const apply = () => {
+      try {
+        ensureStructureLayers(map);
+        setStructuresVisible(map, Boolean(structuresOn));
+      } catch (err) {
+        // A failure here means the layer silently does not exist; do not whisper it.
+        console.error('[structures] layer setup failed:', err.message);
+      }
+    };
+    apply();
+    // styledata fires after a basemap swap; re-adding is cheap and idempotent.
+    map.on('styledata', apply);
+    return () => map.off('styledata', apply);
+  }, [ready, structuresOn]);
+
+  /*
+   * Structures ON the route. Recomputed when the route changes and after the map
+   * settles, because detection reads what is currently rendered — panning along a
+   * long route progressively fills the list in.
+   */
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !ready) return;
+    // Routes arrive as a FeatureCollection; `index` is the property, not the array slot.
+    const feats = routeData?.routes?.features || [];
+    const route = feats.find((f) => f.properties?.index === (selectedIndex ?? 0)) || feats[0];
+    const coords = route?.geometry?.coordinates;
+    if (!coords?.length) {
+      setRouteStructures(map, null);
+      handlers.current.onRouteStructures?.([]);
+      return;
+    }
+
+    let timer = null;
+    const found = new Map();
+
+    const scan = () => {
+      try {
+        const idx = buildRouteIndex(coords);
+        for (const s of findRouteStructures(map, idx.coordinates, idx.cum)) {
+          // Key by kind + rounded distance so repeat scans merge rather than duplicate.
+          found.set(`${s.kind}:${Math.round(s.startDistance / 50)}`, s);
+        }
+      } catch (err) {
+        console.error('[route-structures] detection failed:', err.message);
+        return;
+      }
+      const list = [...found.values()].sort((a, b) => a.startDistance - b.startDistance);
+      setRouteStructures(map, routeStructuresToGeoJSON(list));
+      handlers.current.onRouteStructures?.(list);
+    };
+
+    const schedule = () => {
+      clearTimeout(timer);
+      timer = setTimeout(scan, 350);
+    };
+
+    schedule();
+    map.on('idle', schedule);
+    return () => {
+      clearTimeout(timer);
+      map.off('idle', schedule);
+    };
+  }, [ready, routeData, selectedIndex]);
+
+  /* --------------------------------------------------------- infra POIs */
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !ready || !poiCategories?.length) return;
+    try {
+      ensurePoiLayers(map, poiCategories);
+    } catch (err) {
+      console.warn('[pois]', err.message);
+      return;
+    }
+    const labelFor = (id) => poiCategories.find((c) => c.id === id)?.label;
+    // A POI tap opens the place card rather than only a popup — that is the
+    // tap-POI-to-go flow, so the popup is suppressed when a handler is present.
+    return bindPoiClicks(map, labelFor, (props, coord) =>
+      handlers.current.onPoiClick?.(props, coord),
+    );
+  }, [ready, poiCategories]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !ready) return;
+    setPoiData(map, poiData);
+  }, [poiData, ready]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !ready) return;
+    setPoiVisible(map, Boolean(poiOn));
+  }, [poiOn, ready, poiCategories]);
+
+  /* ------------------------------------------- congestion on chosen route */
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !ready) return;
+    const features = routeData?.routes?.features || [];
+    const selected = features.find((f) => f.properties.index === (selectedIndex ?? 0));
+    const count = setCongestion(map, selected);
+    handlers.current.onCongestionCount?.(count);
+  }, [routeData, selectedIndex, ready, navigating]);
+
+  /* ------------------------------------------------------------- terrain */
+  /*
+   * REAL elevation, not camera pitch.
+   *
+   * The DEM source is added as soon as it is available and terrain is set whenever
+   * the DEM is usable — including in 2D. Two reasons: hillshade needs it, and
+   * queryTerrainElevation (which drives the elevation profile) only returns values
+   * while terrain is active. At pitch 0 an exaggerated DEM is visually almost
+   * indistinguishable from flat, so leaving it on costs nothing and makes the
+   * profile work without forcing the user into 3D.
+   *
+   * The 2D/3D toggle therefore controls PITCH (via the camera controller) and the
+   * exaggeration actually applied, not whether elevation exists.
+   */
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !ready) return;
+
+    if (!terrainAvailable || !terrainSourceDef) {
+      // Never leave broken terrain behind: clear it and report so the UI can
+      // disable 3D and hillshade with a note.
+      try {
+        map.setTerrain(null);
+      } catch {
+        /* nothing set */
+      }
+      setLayerVisibility(map, HILLSHADE_LAYER, false);
+      handlers.current.onTerrainReady?.(false);
+      return;
+    }
+
+    try {
+      ensureDemSource(map, terrainSourceDef);
+      ensureHillshade(map);
+      ensureSteepLayer(map);
+      map.setTerrain({ source: DEM_SOURCE_ID, exaggeration: is3D ? exaggeration : 1 });
+      handlers.current.onTerrainReady?.(true);
+    } catch (err) {
+      console.warn('[terrain]', err.message);
+      handlers.current.onTerrainReady?.(false);
+    }
+  }, [ready, terrainAvailable, terrainSourceDef, is3D, exaggeration]);
+
+  // Pitch is the camera's business; the controller owns it.
+  useEffect(() => {
+    const camera = cameraRef.current;
+    if (!camera || !ready || navigating) return;
+    camera.setPitch(is3D ? (window.matchMedia('(max-width: 760px)').matches ? 50 : 60) : 0);
+  }, [is3D, ready, navigating]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !ready) return;
+    setLayerVisibility(map, HILLSHADE_LAYER, Boolean(hillshadeOn && terrainAvailable));
+  }, [hillshadeOn, terrainAvailable, ready]);
+
+  // Steep stretches over the vehicle's grade limit.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !ready) return;
+    ensureSteepLayer(map);
+    setSteepData(map, steepGeoJSON);
+    setLayerVisibility(map, STEEP_LAYER, Boolean(steepGeoJSON?.features?.length));
+  }, [steepGeoJSON, ready]);
+
+  /* ------------------------------------------------------- 3D buildings */
+  /*
+   * Only in 3D, and only on the vector base. The caller turns imagery off while
+   * buildings are active — draped rooftops plus standing blocks is the "doubled
+   * building" artifact, so the two looks are mutually exclusive by construction.
+   */
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !ready) return;
+    if (buildings3D && is3D) enableBuildings3D(map);
+    else disableBuildings3D(map);
+  }, [buildings3D, is3D, ready]);
+
+  /* --------------------------------------------------------- navigation */
+  const vehicleMarkerRef = useRef(null);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !ready) return;
+    ensureNavLayers(map);
+  }, [ready]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !ready) return;
+    setNavVisible(map, Boolean(navigating));
+    // Ordinary route lines are hidden while navigating: the travelled/ahead split
+    // replaces them, and drawing both makes the guidance line hard to read.
+    for (const id of [LAYERS.alt, LAYERS.altCasing, LAYERS.selected, LAYERS.selectedCasing]) {
+      setLayerVisible(map, id, !navigating);
+    }
+    if (!navigating) {
+      vehicleMarkerRef.current?.remove();
+      vehicleMarkerRef.current = null;
+    }
+  }, [navigating, ready]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !ready || !navigating || !navSplit) return;
+    setNavProgress(map, navSplit);
+  }, [navSplit, navigating, ready]);
+
+  /*
+   * ENTER navigation: exactly one camera animation, fired once per session.
+   */
+  useEffect(() => {
+    const map = mapRef.current;
+    const camera = cameraRef.current;
+    if (!map || !ready || !camera) return;
+
+    if (navigating) {
+      const m = motionRef?.current;
+      if (!enteredNavRef.current && m?.coord) {
+        enteredNavRef.current = true;
+        camera.enterNavigation({ coord: m.coord, bearing: m.bearing || 0, cameraMode });
+      }
+    } else if (enteredNavRef.current) {
+      enteredNavRef.current = false;
+      camera.exitNavigation();
+    }
+  }, [navigating, ready, cameraMode, motionRef]);
+
+  /*
+   * PER-FRAME driver for the puck and the camera.
+   *
+   * Reads the motion ref, which the motion model updates every frame. This is
+   * deliberately NOT a React effect keyed on position: re-rendering the component
+   * 60 times a second, and starting a camera animation per render, was the original
+   * source of the stutter. Here one rAF loop moves a DOM marker and calls jumpTo.
+   */
+  useEffect(() => {
+    const map = mapRef.current;
+    const camera = cameraRef.current;
+    if (!map || !ready || !navigating || !motionRef) return;
+
+    let raf = null;
+    const tick = () => {
+      const m = motionRef.current;
+      if (m?.coord) {
+        if (!vehicleMarkerRef.current) {
+          const el = createVehiclePuckElement(profileId, { showAccuracy: navSource === 'gps' });
+          vehicleMarkerRef.current = new maplibregl.Marker({
+            element: el,
+            rotationAlignment: 'map',
+            pitchAlignment: 'map',
+          })
+            .setLngLat(m.coord)
+            .addTo(map);
+        } else {
+          vehicleMarkerRef.current.setLngLat(m.coord);
+        }
+        vehicleMarkerRef.current.setRotation(m.bearing || 0);
+        // Exposed for the acceptance tests; the marker and the coord it was given.
+        if (typeof window !== 'undefined') {
+          window.__puck = { marker: vehicleMarkerRef.current, coord: m.coord, bearing: m.bearing };
+        }
+
+        if (followCamera && enteredNavRef.current) {
+          camera.follow({ coord: m.coord, bearing: m.bearing, cameraMode });
+        }
+      }
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+
+    return () => {
+      if (raf) cancelAnimationFrame(raf);
+      vehicleMarkerRef.current?.remove();
+      vehicleMarkerRef.current = null;
+    };
+  }, [ready, navigating, followCamera, cameraMode, profileId, navSource, motionRef]);
+
+  // Switching camera mode mid-drive: one easeTo.
+  const lastCameraModeRef = useRef(cameraMode);
+  useEffect(() => {
+    const camera = cameraRef.current;
+    if (!camera || !navigating || !enteredNavRef.current) {
+      lastCameraModeRef.current = cameraMode;
+      return;
+    }
+    if (lastCameraModeRef.current === cameraMode) return;
+    lastCameraModeRef.current = cameraMode;
+    const m = motionRef?.current;
+    if (m?.coord) camera.setCameraMode(cameraMode, { coord: m.coord, bearing: m.bearing || 0 });
+  }, [cameraMode, navigating, motionRef]);
+
+  // Re-centre: a single move with the same parameters as entry.
+  useEffect(() => {
+    const camera = cameraRef.current;
+    if (!camera || !navigating || !followCamera || !recenterRequest) return;
+    const m = motionRef?.current;
+    if (m?.coord) camera.recenter({ coord: m.coord, bearing: m.bearing || 0, cameraMode });
+  }, [recenterRequest, navigating, followCamera, cameraMode, motionRef]);
+
+  /* ------------------------------------------------------------- fly to */
+  /*
+   * Recentres on a requested point (currently the user's own location). Skipped
+   * once a route exists, so fitting the route wins over recentring.
+   */
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !ready || !flyTo) return;
+    if (routeData?.routes?.features?.length) return;
+    // Via the controller: easeTo, not flyTo — flyTo arcs out and back in.
+    cameraRef.current?.goTo({ coord: [flyTo.lon, flyTo.lat], zoom: flyTo.zoom ?? 12 });
+    // routeData intentionally omitted: this should fire when flyTo changes, not
+    // every time a route recalculates.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [flyTo, ready]);
+
+  /* ------------------------------------------------------ picking cursor */
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    const canvas = map.getCanvas();
+    canvas.style.cursor = picking ? 'crosshair' : '';
+  }, [picking]);
+
+  return (
+    <div
+      ref={containerRef}
+      className={`map-canvas ${picking ? 'map-picking' : ''}`}
+      aria-label="Convoy route map"
+    />
+  );
+}

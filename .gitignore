@@ -1,0 +1,20 @@
+# Secrets — never commit
+.env
+.env.*
+!.env.example
+
+# Dependencies
+node_modules/
+
+# Build output
+server/public/
+client/dist/
+
+# Probe artifacts (may contain vendor imagery)
+server/scripts/vantor-sample.*
+server/scripts/vantor-probe-report.json
+
+# OS / editor
+.DS_Store
+*.log
+.vscode/
