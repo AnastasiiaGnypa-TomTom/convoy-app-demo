@@ -1,0 +1,103 @@
+# Deploy to Azure App Service on every push to main.
+#
+# This is the alternative to running ./deploy.sh by hand. Use whichever suits:
+#
+#   deploy.sh        creates the Azure resources AND deploys. Run it first — this
+#                    workflow only deploys to an app that already exists.
+#   this workflow    redeploys on push, with no local az needed.
+#
+# One-time setup after deploy.sh has created the app:
+#
+#   az webapp deployment list-publishing-profiles \
+#     -g rg-convoy-demo -n convoy-demo-tomtom-vantor --xml
+#
+# Put that XML in the repo as the secret AZURE_WEBAPP_PUBLISH_PROFILE
+# (Settings → Secrets and variables → Actions → New repository secret).
+#
+# The vendor keys are NOT here and must never be. They live only as App Service
+# application settings, set by deploy.sh. Putting them in CI would copy both
+# secrets into a second system for no benefit — the build does not need them.
+
+name: Deploy to Azure
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  # A newer push supersedes an in-flight deploy; two overlapping deploys to one
+  # App Service slot race and can leave the site mid-swap.
+  group: deploy-azure
+  cancel-in-progress: true
+
+env:
+  APP_NAME: convoy-demo-tomtom-vantor
+  NODE_VERSION: '22.x'
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+      url: ${{ steps.deploy.outputs.webapp-url }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      # Build here rather than letting Oryx build on the server: a failed build
+      # fails the workflow instead of producing a live app serving the 503
+      # "frontend not built" placeholder.
+      - name: Install and build
+        run: |
+          npm ci
+          npm run build
+
+      - name: Verify no vendor key in the bundle
+        # The build must never embed a credential. This is cheap and catches the
+        # one mistake that would matter, without needing the keys to check.
+        run: |
+          if grep -rIlE 'maxar-api-key|api\.maxar\.com|api\.tomtom\.com' server/public/assets/ ; then
+            echo "::error::A vendor host or auth header appears in the built bundle."
+            exit 1
+          fi
+          echo "No vendor host or auth header in the bundle."
+
+      # Stage only what the server needs at RUNTIME.
+      #
+      # Deploying the workspace as-is would ship client/node_modules — a few
+      # hundred MB of Vite and its transitive deps that exist purely to produce
+      # server/public and are dead weight on the App Service filesystem.
+      - name: Stage the runtime package
+        run: |
+          mkdir -p package
+          cp package.json package-lock.json package/
+          cp -R server package/
+          (cd package && npm ci --omit=dev)
+          du -sh package
+
+      - name: Deploy
+        id: deploy
+        uses: azure/webapps-deploy@v3
+        with:
+          app-name: ${{ env.APP_NAME }}
+          package: package
+          publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE }}
+
+      - name: Smoke test
+        run: |
+          URL="https://${{ env.APP_NAME }}.azurewebsites.net"
+          for i in $(seq 1 30); do
+            CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "$URL/api/health" || echo 000)
+            [ "$CODE" = "200" ] && break
+            sleep 5
+          done
+          [ "$CODE" = "200" ] || { echo "::error::App unhealthy after deploy"; exit 1; }
+          curl -s --max-time 15 "$URL/" | grep -qi '<div id="root"' \
+            || { echo "::error::Frontend not served"; exit 1; }
+          echo "Healthy: $URL"

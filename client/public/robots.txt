@@ -1,0 +1,8 @@
+# This is a sales demo, not public reference data.
+#
+# The infrastructure POI layers aggregate defence and critical-infrastructure
+# locations from licensed TomTom data. Having that surface in search results is
+# neither useful nor appropriate, and the Vantor imagery is licensed rather than
+# ours to republish. Vite copies this file into server/public at build time.
+User-agent: *
+Disallow: /

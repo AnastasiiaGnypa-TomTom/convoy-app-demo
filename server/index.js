@@ -15,6 +15,7 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { ROOT, config, logConfigSummary } from './lib/env.js';
+import { LIMITS, rateLimit } from './lib/rateLimit.js';
 import { DEFAULT_EXAGGERATION, DEM_SOURCE, demSourceForClient } from './lib/terrain.js';
 import { checkTomTomKey } from './lib/tomtom.js';
 import { IMAGERY_MAX_ZOOM, checkVantorKey } from './lib/vantor.js';
@@ -32,8 +33,27 @@ const app = express();
 const PUBLIC_DIR = join(ROOT, 'server', 'public');
 
 app.disable('x-powered-by');
+/*
+ * Trust App Service's front end so req.ip and the rate limiter see the real client
+ * address rather than the load balancer. Exactly one hop is trusted; trusting all
+ * proxies would let a client forge its own address by sending x-forwarded-for.
+ */
+app.set('trust proxy', 1);
 app.use(compression());
 app.use(express.json({ limit: '256kb' }));
+
+/*
+ * Security headers. Modest on purpose — this is a map app, not a form: there is no
+ * login, no cookie and no user input that is echoed back, so the XSS surface is
+ * small. These close the cheap gaps rather than pretending to be a full CSP, which
+ * MapLibre's worker and blob usage would fight.
+ */
+app.use((_req, res, next) => {
+  res.set('x-content-type-options', 'nosniff');
+  res.set('referrer-policy', 'strict-origin-when-cross-origin');
+  res.set('x-frame-options', 'SAMEORIGIN');
+  next();
+});
 
 /* ----------------------------------------------------------------- api ---- */
 
@@ -111,6 +131,22 @@ app.get('/api/config', (_req, res) => {
     },
   });
 });
+
+/*
+ * Rate limits. The keys are server-side, but the quota behind them is not: on a
+ * public URL every endpoint below is an open relay billed to our vendor accounts.
+ * Limits are per-IP and generous enough that a real demo never notices — see
+ * lib/rateLimit.js for how each number was chosen.
+ */
+app.use('/api/imagery', rateLimit(LIMITS.imagery));
+app.use('/api/basemap', rateLimit(LIMITS.imagery));
+app.use('/api/terrain', rateLimit(LIMITS.imagery));
+app.use('/api/route', rateLimit(LIMITS.routing));
+app.use('/api/geocode', rateLimit(LIMITS.search));
+app.use('/api/pois', rateLimit(LIMITS.search));
+app.use('/api/traffic', rateLimit(LIMITS.general));
+app.use('/api/temporal', rateLimit(LIMITS.general));
+app.use('/api/capabilities', rateLimit(LIMITS.general));
 
 app.use('/api/capabilities', capabilitiesRouter);
 app.use('/api/basemap', basemapRouter);
