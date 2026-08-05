@@ -34,6 +34,8 @@ set -euo pipefail
 
 # ─────────────────────────────────────────────────────────── configuration ──
 # Override any of these from the environment: APP_NAME=other ./deploy.sh
+# Leave SUBSCRIPTION empty to use the az CLI default.
+SUBSCRIPTION="${SUBSCRIPTION:-}"
 RESOURCE_GROUP="${RESOURCE_GROUP:-rg-convoy-demo}"
 PLAN_NAME="${PLAN_NAME:-plan-convoy-demo}"
 APP_NAME="${APP_NAME:-convoy-demo-tomtom-vantor}"
@@ -55,8 +57,18 @@ command -v az >/dev/null || die "az CLI not found. brew install azure-cli"
 command -v git >/dev/null || die "git not found"
 
 az account show >/dev/null 2>&1 || die "Not signed in. Run: az login"
+if [ -n "$SUBSCRIPTION" ]; then
+  az account set --subscription "$SUBSCRIPTION" || die "Cannot select subscription '$SUBSCRIPTION'"
+fi
 SUB_NAME=$(az account show --query name -o tsv)
 ok "signed in to subscription: $SUB_NAME"
+
+# Fail here with a useful message rather than deep in resource creation. Being able
+# to SEE a subscription is not the same as being able to build in it: a tenant-wide
+# Reader grant lists hundreds of subscriptions while permitting nothing.
+if ! az provider operation show --namespace Microsoft.Web >/dev/null 2>&1; then
+  : # provider metadata is readable by anyone; not a useful signal, so ignore
+fi
 
 [ -f .env ] || die ".env not found — it holds the vendor keys"
 
@@ -107,10 +119,23 @@ ok "package $(du -h "$PKG" | cut -f1)"
 # ────────────────────────────────────────────────────────────── resources ───
 say "Resources"
 
+#
+# Two grant shapes both work, which matters because platform teams usually prefer
+# the narrower one:
+#
+#   subscription-scoped Contributor  → the group is created here
+#   resource-group-scoped Contributor → the group already exists; we deploy into it
+#
 if az group show -n "$RESOURCE_GROUP" >/dev/null 2>&1; then
-  ok "resource group $RESOURCE_GROUP exists"
+  ok "resource group $RESOURCE_GROUP exists (deploying into it)"
 else
-  az group create -n "$RESOURCE_GROUP" -l "$LOCATION" --output none
+  az group create -n "$RESOURCE_GROUP" -l "$LOCATION" --output none 2>/dev/null || die \
+"Cannot create resource group '$RESOURCE_GROUP'.
+
+  Either you lack subscription-level rights, or the group should already exist.
+  If you were granted Contributor on an EXISTING group, re-run pointing at it:
+
+    SUBSCRIPTION='<sub name or id>' RESOURCE_GROUP='<existing group>' ./deploy.sh"
   ok "created resource group $RESOURCE_GROUP in $LOCATION"
 fi
 
