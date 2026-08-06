@@ -159,9 +159,68 @@ else
   if [ "$AVAILABLE" = "false" ]; then
     die "The name '$APP_NAME' is taken globally. Re-run with: APP_NAME=<unique> ./deploy.sh"
   fi
-  az webapp create -g "$RESOURCE_GROUP" -p "$PLAN_NAME" -n "$APP_NAME" \
-    --runtime "$RUNTIME" --output none
-  ok "created web app $APP_NAME ($RUNTIME)"
+
+  #
+  # Created from an ARM template, NOT `az webapp create`, because of a real
+  # constraint rather than a preference.
+  #
+  # TomTom's CSPM policy set (pd-enforce-web-app-https, effect Deny, assigned at
+  # the ccoe-root management group) rejects any Microsoft.Web/sites whose
+  # properties.httpsOnly is false. `az webapp create` has no --https-only flag: it
+  # creates the site first and you enforce HTTPS afterwards, which means the
+  # resource momentarily exists in a non-compliant state. The policy evaluates the
+  # creation request itself, so that ordering is refused outright — correctly, since
+  # the window it leaves is exactly what the policy exists to prevent.
+  #
+  # A template sets the whole posture in the creation request, so the app is
+  # compliant from the instant it exists. The other hardening is folded in here for
+  # the same reason: one atomic, policy-satisfying create.
+  #
+  PLAN_ID=$(az appservice plan show -g "$RESOURCE_GROUP" -n "$PLAN_NAME" --query id -o tsv)
+  TEMPLATE=$(mktemp -d)/site.json
+  cat > "$TEMPLATE" <<'ARM'
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "appName":  { "type": "string" },
+    "location": { "type": "string" },
+    "planId":   { "type": "string" },
+    "runtime":  { "type": "string" }
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Web/sites",
+      "apiVersion": "2022-09-01",
+      "name": "[parameters('appName')]",
+      "location": "[parameters('location')]",
+      "properties": {
+        "serverFarmId": "[parameters('planId')]",
+        "httpsOnly": true,
+        "siteConfig": {
+          "linuxFxVersion": "[parameters('runtime')]",
+          "appCommandLine": "npm start",
+          "alwaysOn": true,
+          "http20Enabled": true,
+          "minTlsVersion": "1.2",
+          "ftpsState": "Disabled",
+          "healthCheckPath": "/api/health"
+        }
+      }
+    }
+  ]
+}
+ARM
+  # The template takes the pipe form of the runtime (NODE|22-lts); the CLI flag
+  # takes the colon form. Convert rather than maintain two settings.
+  ARM_RUNTIME="${RUNTIME/:/|}"
+  az deployment group create -g "$RESOURCE_GROUP" \
+    --name "convoy-site-$(git rev-parse --short HEAD)" \
+    --template-file "$TEMPLATE" --output none \
+    --parameters appName="$APP_NAME" location="$LOCATION" planId="$PLAN_ID" runtime="$ARM_RUNTIME" \
+    || die "Web app creation failed. If a policy denied it, the reason is printed above."
+  rm -rf "$(dirname "$TEMPLATE")"
+  ok "created web app $APP_NAME ($RUNTIME), HTTPS-only from creation"
 fi
 
 # ─────────────────────────────────────────────────────────────── settings ───
@@ -177,6 +236,8 @@ ok "app settings applied (values not printed)"
 # PORT is deliberately NOT set: App Service injects its own, and lib/env.js reads
 # process.env before the .env file, so the platform value wins with no code change.
 
+# Re-asserted rather than assumed: a fresh create already has these from the
+# template, but a re-run should repair an app whose config drifted.
 az webapp config set -g "$RESOURCE_GROUP" -n "$APP_NAME" --output none \
   --startup-file "npm start" --always-on true --http20-enabled true \
   --min-tls-version 1.2 --ftps-state Disabled
