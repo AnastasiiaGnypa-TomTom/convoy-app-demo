@@ -47,6 +47,28 @@ SKU="${SKU:-B1}"
 RUNTIME="${RUNTIME:-NODE:22-lts}"
 
 say() { printf '\n\033[1;36m▶ %s\033[0m\n' "$1"; }
+
+#
+# Retry a transient Azure failure.
+#
+# Needed because RBAC is not instantly consistent across a resource provider's
+# cache replicas. Freshly granted rights land on different replicas at different
+# times, so the SAME call alternates between allowed and AuthorizationFailed for a
+# while after a grant — measured here at 5 allowed / 1 denied over six consecutive
+# attempts, seconds apart. Dying on the denied one wastes an entire deploy on a
+# condition that resolves itself. Genuine permanent denials still fail, just after
+# the attempts are exhausted.
+#
+retry() {
+  local n=0 max=8
+  until "$@"; do
+    n=$((n + 1))
+    if [ $n -ge $max ]; then return 1; fi
+    printf '  retrying (%d/%d)…\r' "$n" "$max"
+    sleep 10
+  done
+  return 0
+}
 ok()  { printf '  \033[0;32m✓\033[0m %s\n' "$1"; }
 die() { printf '\n\033[0;31m✗ %s\033[0m\n' "$1" >&2; exit 1; }
 
@@ -227,7 +249,7 @@ fi
 say "Configuration"
 
 # --output none matters here: without it az echoes every setting value, keys included.
-az webapp config appsettings set -g "$RESOURCE_GROUP" -n "$APP_NAME" --output none --settings \
+retry az webapp config appsettings set -g "$RESOURCE_GROUP" -n "$APP_NAME" --output none --settings \
   TOMTOM_API_KEY="$TOMTOM_KEY" \
   VANTOR_API_KEY="$VANTOR_KEY" \
   NODE_ENV=production \
@@ -238,23 +260,23 @@ ok "app settings applied (values not printed)"
 
 # Re-asserted rather than assumed: a fresh create already has these from the
 # template, but a re-run should repair an app whose config drifted.
-az webapp config set -g "$RESOURCE_GROUP" -n "$APP_NAME" --output none \
+retry az webapp config set -g "$RESOURCE_GROUP" -n "$APP_NAME" --output none \
   --startup-file "npm start" --always-on true --http20-enabled true \
   --min-tls-version 1.2 --ftps-state Disabled
 ok "startup 'npm start', Always On, HTTP/2, TLS 1.2 floor, FTP disabled"
 
-az webapp config set -g "$RESOURCE_GROUP" -n "$APP_NAME" --output none \
+retry az webapp config set -g "$RESOURCE_GROUP" -n "$APP_NAME" --output none \
   --generic-configurations '{"healthCheckPath": "/api/health"}'
 ok "health check path /api/health"
 
-az webapp update -g "$RESOURCE_GROUP" -n "$APP_NAME" --output none --https-only true
+retry az webapp update -g "$RESOURCE_GROUP" -n "$APP_NAME" --output none --https-only true
 ok "HTTPS only (HTTP redirects)"
 
 # ───────────────────────────────────────────────────────────────── deploy ───
 say "Deploy"
 echo "  Shipping a prebuilt package; no server-side build. Usually under a minute."
 
-az webapp deploy -g "$RESOURCE_GROUP" -n "$APP_NAME" \
+retry az webapp deploy -g "$RESOURCE_GROUP" -n "$APP_NAME" \
   --src-path "$PKG" --type zip --output none
 ok "package deployed"
 
