@@ -50,6 +50,8 @@ export const STRUCTURE_MINZOOM = 12;
 const BASEMAP_SOURCE = 'vectorTiles';
 
 export const STRUCTURE_LAYERS = {
+  bridgeGlow: 'struct-bridge-glow',
+  tunnelGlow: 'struct-tunnel-glow',
   bridgeCasing: 'struct-bridge-casing',
   bridge: 'struct-bridge',
   tunnel: 'struct-tunnel',
@@ -88,19 +90,75 @@ export function ensureStructureLayers(map) {
     }
   }
 
+  /*
+   * Weighted for the LOW end of the range, not the high end.
+   *
+   * The previous ramp gave 0.8x width at z13, which meant that at the very zoom where
+   * these first become available they were hairlines over a busy basemap — visible only
+   * if you already knew where to look. Since z12 is a hard floor (see STRUCTURE_MINZOOM)
+   * the first two levels are the ones that matter most, so the ramp now starts ABOVE 1x
+   * and eases down as the roads themselves get wider and carry the shape anyway.
+   */
   const width = (base) => [
     'interpolate',
     ['linear'],
     ['zoom'],
-    10,
-    base * 0.5,
-    13,
-    base * 0.8,
+    12,
+    base * 1.5,
+    14,
+    base * 1.25,
     16,
     base,
     18,
     base * 1.4,
   ];
+
+  /*
+   * A soft glow under each line. At z12-13 a 5px line competes with road casings of a
+   * similar weight; the glow gives it a halo so it separates from the basemap without
+   * having to make the line itself fat enough to obscure the road it sits on.
+   */
+  const glow = (base, color) => ({
+    'line-color': color,
+    /*
+     * Kept deliberately tight. A 2.6x halo was tried and reverted: in a canal city like
+     * Utrecht there are several hundred short bridges in one z12 view, and a wide blurred
+     * halo around each merges them into pink fuzz rather than reading as crossings. The
+     * line itself carries the visibility; the halo only has to separate it from the road
+     * casing underneath.
+     */
+    'line-width': width(base * 1.9),
+    'line-opacity': ['interpolate', ['linear'], ['zoom'], 12, 0.3, 15, 0.16],
+    'line-blur': ['interpolate', ['linear'], ['zoom'], 12, 3, 16, 2],
+  });
+
+  map.addLayer(
+    {
+      id: STRUCTURE_LAYERS.bridgeGlow,
+      type: 'line',
+      source: BASEMAP_SOURCE,
+      'source-layer': 'roads',
+      minzoom: STRUCTURE_MINZOOM,
+      filter: ['==', ['get', 'bridge'], true],
+      layout: { visibility: 'none', 'line-cap': 'round', 'line-join': 'round' },
+      paint: glow(4.5, BRIDGE_COLOR),
+    },
+    beforeId,
+  );
+
+  map.addLayer(
+    {
+      id: STRUCTURE_LAYERS.tunnelGlow,
+      type: 'line',
+      source: BASEMAP_SOURCE,
+      'source-layer': 'roads',
+      minzoom: STRUCTURE_MINZOOM,
+      filter: ['==', ['get', 'tunnel'], true],
+      layout: { visibility: 'none', 'line-cap': 'round', 'line-join': 'round' },
+      paint: glow(4, TUNNEL_COLOR),
+    },
+    beforeId,
+  );
 
   map.addLayer(
     {
@@ -125,7 +183,7 @@ export function ensureStructureLayers(map) {
       minzoom: STRUCTURE_MINZOOM,
       filter: ['==', ['get', 'bridge'], true],
       layout: { visibility: 'none', 'line-cap': 'butt', 'line-join': 'round' },
-      paint: { 'line-color': BRIDGE_COLOR, 'line-width': width(4.5), 'line-opacity': 0.95 },
+      paint: { 'line-color': BRIDGE_COLOR, 'line-width': width(4.5), 'line-opacity': 1 },
     },
     beforeId,
   );
@@ -142,7 +200,7 @@ export function ensureStructureLayers(map) {
       paint: {
         'line-color': TUNNEL_COLOR,
         'line-width': width(4),
-        'line-opacity': 0.9,
+        'line-opacity': 0.98,
         // Dashed: a tunnel is road you cannot see.
         'line-dasharray': [1.6, 1.1],
       },
@@ -216,7 +274,7 @@ export function setRouteStructures(map, fc) {
  * rejected outright (400 "Invalid section type value") and `sectionType=tunnel`
  * returned no sections on test corridors.
  */
-export function findRouteStructures(map, coordinates, cum, { sampleEveryM = 60 } = {}) {
+export function findRouteStructures(map, coordinates, cum, { sampleEveryM = 25 } = {}) {
   if (!map || !coordinates?.length || !cum?.length) return [];
 
   const total = cum[cum.length - 1] || 0;
@@ -245,10 +303,22 @@ export function findRouteStructures(map, coordinates, cum, { sampleEveryM = 60 }
 
     let feats = [];
     try {
+      /*
+       * A TIGHT box, and the NEAREST feature wins.
+       *
+       * This was ±6px with "tunnel if any feature in the box is a tunnel", which at z13
+       * is a ~50 m window in a dense city centre — so it picked up parallel and crossing
+       * roads and reported them as structures on the route. Central Rotterdam came back
+       * with a dozen spurious tunnels named after adjacent streets.
+       *
+       * Now the box is small and the kind is taken from the single closest feature rather
+       * than from an any-match, so a tunnel beside the route no longer makes the route
+       * look like a tunnel.
+       */
       feats = map.queryRenderedFeatures(
         [
-          [pt.x - 6, pt.y - 6],
-          [pt.x + 6, pt.y + 6],
+          [pt.x - 3, pt.y - 3],
+          [pt.x + 3, pt.y + 3],
         ],
         { layers: [STRUCTURE_LAYERS.bridge, STRUCTURE_LAYERS.tunnel].filter((l) => map.getLayer(l)) },
       );
@@ -257,23 +327,88 @@ export function findRouteStructures(map, coordinates, cum, { sampleEveryM = 60 }
     }
     if (!feats.length) continue;
 
-    const isTunnel = feats.some((f) => f.layer.id === STRUCTURE_LAYERS.tunnel);
+    /*
+     * Closest feature by distance to its nearest SEGMENT, not its nearest vertex.
+     *
+     * Vertex distance was tried and is wrong: a long straight span like the Erasmusbrug
+     * is encoded with vertices only where it bends, so a sample in the middle of the deck
+     * can be 300 m from any vertex while sitting exactly on the line. Those samples were
+     * rejected by the 25 m test, which punched gaps into the run and fragmented one bridge
+     * into five entries. Point-to-segment distance is the predicate that actually answers
+     * "is this road under my sample".
+     */
+    const mPerDegLon = Math.cos((lngLat[1] * Math.PI) / 180) * 111320;
+    const toLocal = (c) => [(c[0] - lngLat[0]) * mPerDegLon, (c[1] - lngLat[1]) * 110540];
+
+    let best = null;
+    let bestD = Infinity;
+    for (const f of feats) {
+      const g = f.geometry;
+      const parts = g.type === 'MultiLineString' ? g.coordinates : [g.coordinates || []];
+      for (const part of parts) {
+        for (let k = 1; k < part.length; k++) {
+          const [ax, ay] = toLocal(part[k - 1]);
+          const [bx, by] = toLocal(part[k]);
+          const vx = bx - ax;
+          const vy = by - ay;
+          const len2 = vx * vx + vy * vy;
+          // Project the sample (which is the local origin) onto the segment.
+          const tt = len2 > 0 ? Math.max(0, Math.min(1, -(ax * vx + ay * vy) / len2)) : 0;
+          const px = ax + vx * tt;
+          const py = ay + vy * tt;
+          const sq = px * px + py * py;
+          if (sq < bestD) {
+            bestD = sq;
+            best = f;
+          }
+        }
+        // Degenerate single-point part: fall back to the point itself.
+        if (part.length === 1) {
+          const [ax, ay] = toLocal(part[0]);
+          const sq = ax * ax + ay * ay;
+          if (sq < bestD) {
+            bestD = sq;
+            best = f;
+          }
+        }
+      }
+    }
+    if (!best) continue;
+    // Beyond ~25 m it is a different road, not the one we are driving.
+    if (Math.sqrt(bestD) > 25) continue;
+
     hits.push({
       distance: d,
       coord: lngLat,
-      kind: isTunnel ? 'tunnel' : 'bridge',
-      name: feats[0].properties?.name || feats[0].properties?.road_number || null,
+      kind: best.layer.id === STRUCTURE_LAYERS.tunnel ? 'tunnel' : 'bridge',
+      name: best.properties?.name || best.properties?.road_number || null,
     });
   }
 
-  // Merge consecutive samples of the same kind into one structure.
+  /*
+   * Merge consecutive samples into one structure — but only when they are plausibly the
+   * SAME structure.
+   *
+   * The first version merged on kind alone within 2.5 sample steps, which conflated
+   * genuinely separate structures: two bridges 100 m apart became one entry whose
+   * reported length spanned both, which is how a 796 m "tunnel" appeared in the list.
+   * Requiring the name to match as well keeps distinct crossings distinct.
+   *
+   * Length is the extent of the samples that hit, so its resolution is the sample step.
+   * The caller reports it as approximate rather than implying survey precision.
+   */
   const merged = [];
+  const norm = (n) => (n || '').toLowerCase();
   for (const h of hits) {
     const last = merged[merged.length - 1];
-    if (last && last.kind === h.kind && h.distance - last.endDistance < sampleEveryM * 2.5) {
+    const sameRun =
+      last &&
+      last.kind === h.kind &&
+      norm(last.name) === norm(h.name) &&
+      h.distance - last.endDistance <= sampleEveryM * 2;
+    if (sameRun) {
       last.endDistance = h.distance;
       last.lengthM = last.endDistance - last.startDistance;
-      if (!last.name && h.name) last.name = h.name;
       continue;
     }
     merged.push({
@@ -283,6 +418,8 @@ export function findRouteStructures(map, coordinates, cum, { sampleEveryM = 60 }
       endDistance: h.distance,
       lengthM: 0,
       coord: h.coord,
+      // So the UI can say "about", and can omit a length it cannot actually resolve.
+      resolutionM: sampleEveryM,
     });
   }
   return merged;

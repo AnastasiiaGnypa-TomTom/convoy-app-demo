@@ -1115,16 +1115,6 @@ export default function App() {
                   onExaggerationChange={setExaggeration}
                 />
               </div>
-              {start && (
-                <button
-                  type="button"
-                  className="fab"
-                  onClick={() => setFlyTo({ lat: start.lat, lon: start.lon, zoom: 14 })}
-                  title="Re-centre on me"
-                >
-                  ⌖
-                </button>
-              )}
             </div>
           )}
 

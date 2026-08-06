@@ -165,7 +165,12 @@ export default function MapView({
         center: config.map.center,
         zoom: config.map.zoom,
         maxPitch: config.map.maxPitch ?? 75,
-        attributionControl: { compact: true },
+        /*
+         * Not compact: compact mode collapses the credit into an (i) button, which is
+         * one more thing on the map for no benefit. TomTom and Vantor both require
+         * attribution to be shown, so the text stays — it is the toggle that goes.
+         */
+        attributionControl: { compact: false },
         pixelRatio: Math.min(window.devicePixelRatio || 1, 2),
         /*
          * A big tile cache is what stops the drive re-fetching imagery it passed a

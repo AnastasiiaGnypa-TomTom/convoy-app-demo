@@ -282,7 +282,14 @@ export default function Sidebar({
                           {x.startDistance < 1000
                             ? `${Math.round(x.startDistance / 10) * 10} m`
                             : `${(x.startDistance / 1000).toFixed(1)} km`}
-                          {x.lengthM >= 100 ? ` · ${Math.round(x.lengthM)} m long` : ''}
+                          {/*
+                            * Length is only shown when it exceeds the detection
+                            * resolution, and is marked approximate. Reporting "122 m"
+                            * off a 25 m sampling step would be false precision.
+                            */}
+                          {x.lengthM > (x.resolutionM || 25) * 2
+                            ? ` · ~${Math.round(x.lengthM / 50) * 50} m long`
+                            : ''}
                         </span>
                       </li>
                     ))}
