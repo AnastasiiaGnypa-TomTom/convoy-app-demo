@@ -490,7 +490,10 @@ export default function App() {
    * because a corridor does not depend on where the camera is looking.
    */
   useEffect(() => {
-    if (!structuresOn || !selectedRouteCoords?.length) {
+    // tweak: no longer gated on `structuresOn` — the "On this route" list is useful
+    // even when the map layer is decluttered off. Visibility of the LINES is still
+    // controlled by the toggle in MapView.
+    if (!selectedRouteCoords?.length) {
       setRouteStructureLines(null);
       return;
     }
@@ -640,6 +643,67 @@ export default function App() {
    * The camera only moves when none are visible, which is the one case where a highlight
    * on its own would appear to do nothing.
    */
+  /*
+   * tweak: the "On this route" list, sourced from the server's along-route extraction.
+   *
+   * The existing list (`routeStructures`) comes from scanning what the map has RENDERED,
+   * which only works at zoom 12+ and only while the layer is visible — so on a wide Alps
+   * view it was always empty. The server extraction is zoom-independent and already
+   * fetched, so it is used whenever the rendered scan comes up short. Additive: the
+   * original path still wins when it has more detail.
+   */
+  const routeStructureList = useMemo(() => {
+    if (routeStructures?.length) return routeStructures;
+    const feats = routeStructureLines?.features || [];
+    if (!feats.length) return routeStructures || [];
+
+    /*
+     * Only structures worth listing. The raw extraction returns everything — 871 on the
+     * Emmen to Locarno route, mostly 15 m field bridges — which is a list nobody reads.
+     * A convoy planner cares about the long spans and the ones on major roads.
+     */
+    const MAJOR = ['motorway', 'trunk', 'primary'];
+    const significant = feats.filter((f) => {
+      const p = f.properties || {};
+      return Number(p.length_m) >= 100 || MAJOR.includes(p.category);
+    });
+
+    const byKey = new Map();
+    for (const f of significant) {
+      const p = f.properties || {};
+      const kind = p.kind === 'tunnel' || p.tunnel === true ? 'tunnel' : 'bridge';
+      const startDistance = Number(p.distance_m) || 0;
+      // Merge fragments of the same structure: same kind, same name, within 250 m.
+      const key = `${kind}:${(p.name || '').toLowerCase()}:${Math.round(startDistance / 250)}`;
+      const prev = byKey.get(key);
+      const lengthM = Number(p.length_m) || 0;
+      if (prev) {
+        /*
+         * MAX, not sum. A dual carriageway arrives as two parallel segments of the same
+         * structure, so adding them reported a 3.3 km bridge where the real span is
+         * ~1.1 km. The longest fragment is the better estimate of the structure itself.
+         */
+        prev.lengthM = Math.max(prev.lengthM, lengthM);
+        continue;
+      }
+      byKey.set(key, {
+        kind,
+        name: p.name || null,
+        startDistance,
+        endDistance: startDistance,
+        lengthM,
+        resolutionM: 50,
+        coord: (f.geometry.type === 'MultiLineString'
+          ? f.geometry.coordinates[0]?.[0]
+          : f.geometry.coordinates?.[0]) || null,
+      });
+    }
+    // Capped so the panel stays readable; the map still shows every structure.
+    return [...byKey.values()]
+      .sort((a, b) => a.startDistance - b.startDistance)
+      .slice(0, 40);
+  }, [routeStructures, routeStructureLines]);
+
   const handleLocatePoiLayer = useCallback(
     (layerId) => {
       const feats = (poiData?.features || []).filter((f) => f.properties?.layer === layerId);
@@ -1129,7 +1193,7 @@ export default function App() {
             profileId={profileId}
             custom={custom}
             routes={routeData?.routes}
-            routeStructures={routeStructures}
+            routeStructures={routeStructureList}
             selectedIndex={selectedIndex}
             routeLoading={routeLoading}
             routeError={error}

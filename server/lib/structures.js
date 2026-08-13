@@ -125,15 +125,23 @@ function extractFromTile(buffer, tile) {
        * multi-kilometre tunnels. Without a size the two are indistinguishable and the
        * dense case turns the map into noise.
        */
+      /*
+       * tweak: the LONGEST part, not the sum of all parts. A tile feature can be a
+       * MultiLineString of several disjoint bridge sections on the same road, so summing
+       * reported a single 2.5 km "bridge" that is really a few hundred metres of viaduct
+       * repeated along the valley.
+       */
       let lengthM = 0;
       for (const line of lines) {
+        let partM = 0;
         for (let k = 1; k < line.length; k++) {
           const mPerLon = Math.cos((line[k][1] * Math.PI) / 180) * 111320;
-          lengthM += Math.hypot(
+          partM += Math.hypot(
             (line[k][0] - line[k - 1][0]) * mPerLon,
             (line[k][1] - line[k - 1][1]) * 110540,
           );
         }
+        lengthM = Math.max(lengthM, partM);
       }
 
       out.push({
@@ -310,6 +318,54 @@ export async function structuresAlongRoute(points, { fetchTile, corridorM = 1500
     }
     return false;
   });
+
+  /*
+   * tweak: stamp each structure with how far along the route it sits, so the panel can
+   * list them in travel order with a distance. Previously the list was derived from what
+   * the map had RENDERED, which meant it was empty at regional zoom and empty whenever
+   * the Bridges & tunnels layer was switched off.
+   */
+  const cum = [0];
+  for (let i = 1; i < points.length; i++) {
+    const mPerLon = Math.cos((points[i].lat * Math.PI) / 180) * 111320;
+    cum.push(
+      cum[i - 1] +
+        Math.hypot(
+          (points[i].lon - points[i - 1].lon) * mPerLon,
+          (points[i].lat - points[i - 1].lat) * 110540,
+        ),
+    );
+  }
+  const distanceAlong = ([lon, lat]) => {
+    const mPerLon = Math.cos((lat * Math.PI) / 180) * 111320;
+    let best = Infinity;
+    let at = 0;
+    for (let i = 1; i < points.length; i++) {
+      const ax = (points[i - 1].lon - lon) * mPerLon;
+      const ay = (points[i - 1].lat - lat) * 110540;
+      const bx = (points[i].lon - lon) * mPerLon;
+      const by = (points[i].lat - lat) * 110540;
+      const vx = bx - ax;
+      const vy = by - ay;
+      const len2 = vx * vx + vy * vy;
+      const t = len2 > 0 ? Math.max(0, Math.min(1, -(ax * vx + ay * vy) / len2)) : 0;
+      const px = ax + vx * t;
+      const py = ay + vy * t;
+      const d2 = px * px + py * py;
+      if (d2 < best) {
+        best = d2;
+        at = cum[i - 1] + (cum[i] - cum[i - 1]) * t;
+      }
+    }
+    return at;
+  };
+
+  for (const f of near) {
+    const parts =
+      f.geometry.type === 'MultiLineString' ? f.geometry.coordinates : [f.geometry.coordinates];
+    const first = parts[0]?.[0];
+    if (first) f.properties = { ...f.properties, distance_m: Math.round(distanceAlong(first)) };
+  }
 
   return {
     type: 'FeatureCollection',
