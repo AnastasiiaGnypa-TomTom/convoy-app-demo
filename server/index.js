@@ -245,7 +245,22 @@ if (existsSync(PUBLIC_DIR)) {
       },
     }),
   );
-  // Single-page app: any non-API path returns index.html.
+  /*
+   * Build assets 404 rather than falling through to the SPA.
+   *
+   * Anything under /assets/ is a content-hashed build file: it either exists or it does
+   * not, and there is no meaningful HTML answer for a missing one. Without this, a stale
+   * index.html requesting a bundle that is no longer deployed got 200 + index.html back,
+   * the browser tried to parse HTML as JavaScript, and the page failed with a syntax
+   * error that says nothing about the real cause. It also makes "is this asset actually
+   * deployed?" answerable with curl — during this deploy the SPA fallback made three
+   * long-gone bundles look present.
+   */
+  app.use('/assets', (_req, res) => {
+    res.status(404).type('text/plain').send('Not found');
+  });
+
+  // Single-page app: any other non-API path returns index.html.
   app.get('*', (_req, res) => res.sendFile(join(PUBLIC_DIR, 'index.html')));
 } else {
   app.get('*', (_req, res) => {
