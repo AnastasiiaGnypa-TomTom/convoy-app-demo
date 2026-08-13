@@ -449,18 +449,18 @@ export default function MapView({
     if (!map || !ready) return;
 
     /*
-     * tweak: once a start and destination are set, bridges and tunnels are shown only
-     * along the route. Off-route structures are noise for a convoy planner — the whole
-     * point is which ones the vehicle actually has to cross — and in a city they buried
-     * the route's own under hundreds of unrelated ones. With no route, the viewport
-     * behaviour is unchanged.
+     * tweak: off-route structures are shown again, but de-emphasised in paint (thin and
+     * faded — see roadStructures.js) rather than hidden.
+     *
+     * Hiding them outright was worse than it sounds: with a route active the toggle then
+     * had no visible effect anywhere the route itself was off screen, which reads as a
+     * broken switch. Visibility now depends on the toggle ALONE, so flipping it always
+     * changes something.
      */
-    const hasRoute = Boolean(routeData?.routes?.features?.length);
-
     const apply = () => {
       try {
         ensureStructureLayers(map);
-        setStructuresVisible(map, Boolean(structuresOn) && !hasRoute);
+        setStructuresVisible(map, Boolean(structuresOn));
       } catch (err) {
         // A failure here means the layer silently does not exist; do not whisper it.
         console.error('[structures] layer setup failed:', err.message);
@@ -571,12 +571,9 @@ export default function MapView({
       try {
         ensureExtractedLayers(map);
         setExtractedStructures(map, extractedStructures);
-        // tweak: hidden while a route is active — the route corridor layer covers it.
-        const hasRoute = Boolean(routeData?.routes?.features?.length);
-        setExtractedVisible(
-          map,
-          Boolean(structuresOn && extractedStructures?.features?.length) && !hasRoute,
-        );
+        // tweak: shown regardless of a route; the route corridor layer draws on top of
+        // these in full route width, so the two read as emphasised vs de-emphasised.
+        setExtractedVisible(map, Boolean(structuresOn && extractedStructures?.features?.length));
       } catch (err) {
         console.warn('[structures/x]', err.message);
       }

@@ -203,7 +203,8 @@ export function ensureStructureLayers(map) {
       minzoom: STRUCTURE_MINZOOM,
       filter: ['==', ['get', 'bridge'], true],
       layout: { visibility: 'none', 'line-cap': 'butt', 'line-join': 'round' },
-      paint: { 'line-color': '#0b1016', 'line-width': width(9), 'line-opacity': significanceOpacity(0.7) },
+      // tweak: off-route casing scaled down with its line.
+      paint: { 'line-color': '#0b1016', 'line-width': width(4.5), 'line-opacity': significanceOpacity(0.4) },
     },
     beforeId,
   );
@@ -217,7 +218,10 @@ export function ensureStructureLayers(map) {
       minzoom: STRUCTURE_MINZOOM,
       filter: ['==', ['get', 'bridge'], true],
       layout: { visibility: 'none', 'line-cap': 'butt', 'line-join': 'round' },
-      paint: { 'line-color': BRIDGE_COLOR, 'line-width': width(4.5), 'line-opacity': significanceOpacity(1) },
+      // tweak: OFF-ROUTE styling — deliberately thin and faded so it is obvious these
+      // are nearby structures, not ones the convoy crosses. On-route lines are full
+      // route width at 0.95 opacity; these are roughly a third of that.
+      paint: { 'line-color': BRIDGE_COLOR, 'line-width': width(2.2), 'line-opacity': significanceOpacity(0.45) },
     },
     beforeId,
   );
@@ -233,8 +237,9 @@ export function ensureStructureLayers(map) {
       layout: { visibility: 'none', 'line-cap': 'butt', 'line-join': 'round' },
       paint: {
         'line-color': TUNNEL_COLOR,
-        'line-width': width(4),
-        'line-opacity': significanceOpacity(0.98),
+        // tweak: OFF-ROUTE styling — see the bridge layer above.
+        'line-width': width(2),
+        'line-opacity': significanceOpacity(0.45),
         // Dashed: a tunnel is road you cannot see.
         'line-dasharray': [1.6, 1.1],
       },
@@ -817,7 +822,14 @@ export function ensureRouteStructureLayers(map) {
   }
 
   // Slightly heavier than the basemap versions: these are the ones that matter.
-  const w = (base) => ['interpolate', ['linear'], ['zoom'], 8, base * 1.2, 11, base * 1.6, 15, base];
+  /*
+   * tweak: the SAME ramp routeLayers.js uses for the route line (base*0.6 at z8, base at
+   * z12, base*1.5 at z16). Passing base 6.5 therefore makes an on-route bridge or tunnel
+   * exactly as wide as the blue line it sits on, at every zoom — which is the point: on
+   * the route it IS the route, just coloured by what kind of structure it is.
+   */
+  const w = (base) => ['interpolate', ['linear'], ['zoom'], 8, base * 0.6, 12, base, 16, base * 1.5];
+  const ROUTE_WIDTH = 6.5;
 
   const add = (id, paint, filter) =>
     map.addLayer(
@@ -834,26 +846,25 @@ export function ensureRouteStructureLayers(map) {
 
   add(ROUTE_STRUCT_LAYERS.glow, {
     'line-color': ['match', ['get', 'kind'], 'tunnel', TUNNEL_COLOR, BRIDGE_COLOR],
-    // tweak: halved with the lines below (was w(9)) so the halo stops dominating.
-    'line-width': w(4.5),
+    // tweak: sized against the route-width lines below.
+    'line-width': w(ROUTE_WIDTH * 1.9),
     // tweak: softer halo (was 0.3) to match the thinner, translucent lines.
     'line-opacity': significanceOpacity(0.18),
     'line-blur': 3,
   });
   add(ROUTE_STRUCT_LAYERS.casing, {
     'line-color': '#0b1016',
-    // tweak: halved (was w(6)) to match the thinner lines.
-    'line-width': w(3),
+    // tweak: a touch wider than the line so it reads as an outline.
+    'line-width': w(ROUTE_WIDTH * 1.35),
     'line-opacity': significanceOpacity(0.6),
   });
   add(
     ROUTE_STRUCT_LAYERS.bridge,
     {
       'line-color': BRIDGE_COLOR,
-      // tweak: same treatment as the steep band — half the width (was w(3.4)) and
-      // semi-transparent, so it annotates the route instead of replacing it.
-      'line-width': w(1.7),
-      'line-opacity': significanceOpacity(0.85),
+      // tweak: matches the blue route line's width exactly (see ROUTE_WIDTH).
+      'line-width': w(ROUTE_WIDTH),
+      'line-opacity': significanceOpacity(0.95),
     },
     ['==', ['get', 'kind'], 'bridge'],
   );
@@ -861,9 +872,9 @@ export function ensureRouteStructureLayers(map) {
     ROUTE_STRUCT_LAYERS.tunnel,
     {
       'line-color': TUNNEL_COLOR,
-      // tweak: half the width (was w(3.2)) and semi-transparent, matching the steep band.
-      'line-width': w(1.6),
-      'line-opacity': significanceOpacity(0.85),
+      // tweak: matches the blue route line's width exactly (see ROUTE_WIDTH).
+      'line-width': w(ROUTE_WIDTH),
+      'line-opacity': significanceOpacity(0.95),
       'line-dasharray': [1.6, 1.1],
     },
     ['==', ['get', 'kind'], 'tunnel'],
