@@ -28,6 +28,8 @@ import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createCache } from '../lib/cache.js';
+// tweak: demo pre-cache. Pure fallback — absent file means the live path is untouched.
+import { bboxMatchesDemo, demoFeatures, routeMatchesDemo } from '../lib/demoPoiCache.js';
 import { VendorError, tomtomFetch, tomtomJson, tomtomUrl } from '../lib/tomtom.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -374,6 +376,27 @@ poisRouter.get('/', async (req, res, next) => {
   }
 
   const key = `browse|${parts.map((n) => n.toFixed(3)).join(',')}|${queryable.slice().sort().join(',')}`;
+  /*
+   * tweak: demo corridor served from the pre-built file, so the filmed route shows its
+   * POIs instantly. Only fires when the view centre is inside that corridor AND the file
+   * exists; otherwise this block is skipped entirely and the live fetch below runs.
+   */
+  if (bboxMatchesDemo(parts)) {
+    const demo = demoFeatures(queryable, parts);
+    if (demo && demo.features.length) {
+      res.set('x-cache', 'demo');
+      return res.json(
+        summarise({
+          features: demo.features,
+          perLayer: demo.perLayer,
+          violations: [],
+          noSource,
+          extra: { mode: 'demo-cache', builtAt: demo.builtAt },
+        }),
+      );
+    }
+  }
+
   const cached = poiCache.get(key);
   if (cached) {
     res.set('x-cache', 'hit');
@@ -495,6 +518,26 @@ poisRouter.post('/along-route', async (req, res, next) => {
   );
   if (!queryable.length) {
     return res.json(summarise({ features: [], perLayer: {}, violations: [], noSource }));
+  }
+
+  /*
+   * tweak: the filmed route is served from the pre-built cache. Matched endpoint to
+   * endpoint, so any other route falls straight through to the live corridor sweep.
+   */
+  if (routeMatchesDemo(route)) {
+    const demo = demoFeatures(queryable);
+    if (demo && demo.features.length) {
+      res.set('x-cache', 'demo');
+      return res.json(
+        summarise({
+          features: demo.features,
+          perLayer: demo.perLayer,
+          violations: [],
+          noSource,
+          extra: { mode: 'along-route', corridorKm: 10, demoCache: true, builtAt: demo.builtAt },
+        }),
+      );
+    }
   }
 
   const km = Math.min(50, Math.max(0.5, Number(corridorKm) || DEFAULT_CORRIDOR_KM));

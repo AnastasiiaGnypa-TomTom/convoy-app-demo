@@ -13,7 +13,8 @@
     "build": "npm --prefix client install && npm --prefix client run build",
     "dev": "node server/index.js",
     "verify:pois": "node server/scripts/verify-poi-categories.js",
-    "test:pois": "node server/scripts/test-poi-layers.js"
+    "test:pois": "node server/scripts/test-poi-layers.js",
+    "cache:demo": "node server/scripts/build-demo-poi-cache.js"
   },
   "dependencies": {
     "@mapbox/vector-tile": "^3.0.0",
