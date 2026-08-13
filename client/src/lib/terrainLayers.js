@@ -66,7 +66,10 @@ export function ensureSteepLayer(map) {
       // Amber to match the chart bands, and wider than the route so it reads as a
       // marking ON the route rather than a different road.
       'line-color': '#f59e0b',
-      'line-width': ['interpolate', ['linear'], ['zoom'], 9, 6, 16, 12],
+      // tweak: halved (was 9→6, 16→12). At those values the steep-gradient band was
+      // ~9.4px against a ~9.75px route line — visually identical, which is why it read
+      // as a second road rather than an annotation on the route.
+      'line-width': ['interpolate', ['linear'], ['zoom'], 9, 3, 16, 6],
       'line-opacity': 0.85,
     },
   });

@@ -127,10 +127,11 @@ export function ensureRouteLayers(map) {
         '#b91c1c',
         '#f97316',
       ],
-      // tweak: congestion drawn thinner than the route (was width(6.5), opacity 0.95)
-      // so traffic reads as a subtle accent on the line rather than covering it.
-      'line-width': width(2.5),
-      'line-opacity': 0.8,
+      // tweak: congestion drawn as a thin, soft accent down the middle of the route
+      // (~30% of route width) so traffic reads without looking messy or covering the
+      // line. Was width(6.5)/0.95, then width(2.5)/0.8, now width(2)/0.7.
+      'line-width': width(2),
+      'line-opacity': 0.7,
     },
   });
 }
