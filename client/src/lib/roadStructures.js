@@ -834,26 +834,36 @@ export function ensureRouteStructureLayers(map) {
 
   add(ROUTE_STRUCT_LAYERS.glow, {
     'line-color': ['match', ['get', 'kind'], 'tunnel', TUNNEL_COLOR, BRIDGE_COLOR],
-    'line-width': w(9),
-    'line-opacity': significanceOpacity(0.3),
+    // tweak: halved with the lines below (was w(9)) so the halo stops dominating.
+    'line-width': w(4.5),
+    // tweak: softer halo (was 0.3) to match the thinner, translucent lines.
+    'line-opacity': significanceOpacity(0.18),
     'line-blur': 3,
   });
   add(ROUTE_STRUCT_LAYERS.casing, {
     'line-color': '#0b1016',
-    'line-width': w(6),
+    // tweak: halved (was w(6)) to match the thinner lines.
+    'line-width': w(3),
     'line-opacity': significanceOpacity(0.6),
   });
   add(
     ROUTE_STRUCT_LAYERS.bridge,
-    { 'line-color': BRIDGE_COLOR, 'line-width': w(3.4), 'line-opacity': significanceOpacity(1) },
+    {
+      'line-color': BRIDGE_COLOR,
+      // tweak: same treatment as the steep band — half the width (was w(3.4)) and
+      // semi-transparent, so it annotates the route instead of replacing it.
+      'line-width': w(1.7),
+      'line-opacity': significanceOpacity(0.85),
+    },
     ['==', ['get', 'kind'], 'bridge'],
   );
   add(
     ROUTE_STRUCT_LAYERS.tunnel,
     {
       'line-color': TUNNEL_COLOR,
-      'line-width': w(3.2),
-      'line-opacity': significanceOpacity(1),
+      // tweak: half the width (was w(3.2)) and semi-transparent, matching the steep band.
+      'line-width': w(1.6),
+      'line-opacity': significanceOpacity(0.85),
       'line-dasharray': [1.6, 1.1],
     },
     ['==', ['get', 'kind'], 'tunnel'],
