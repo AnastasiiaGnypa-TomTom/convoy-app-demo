@@ -206,15 +206,6 @@ export function bindAlternativeClicks(map, onSelect) {
   };
 }
 
-/** A labelled pin for the start or destination. */
-export function createEndpointMarker({ color, title }) {
-  const el = document.createElement('div');
-  el.className = 'endpoint-marker';
-  el.style.setProperty('--marker-color', color);
-  el.title = title;
-  return new maplibregl.Marker({ element: el, anchor: 'bottom' });
-}
-
 /**
  * Frame the whole route, leaving room for the panel and controls.
  *

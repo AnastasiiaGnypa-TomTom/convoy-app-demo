@@ -72,7 +72,19 @@ geocodeRouter.get('/', async (req, res, next) => {
         limit: 6,
         // Keep suggestions to things a vehicle can actually be routed to.
         idxSet: 'POI,PAD,Str,Xstr,Geo,Addr',
-        ...(hasBias ? { lat, lon, radius: 150000 } : {}),
+        /*
+         * lat/lon BIAS the ranking. `radius` would RESTRICT it, and did.
+         *
+         * With radius: 150000 anything further than 150 km from the map centre was
+         * invisible — searching "Emmen airport" from a Dutch view returned zero results
+         * even though TomTom holds it as a Swiss POI. A search box that silently cannot
+         * see another country is worse than one that ranks it second.
+         *
+         * Verified that dropping radius does not make local search worse: with a Utrecht
+         * centre, "Utrecht Centraal" and a generic "hospital" still return Utrecht results
+         * first, because lat/lon still bias the ranking.
+         */
+        ...(hasBias ? { lat, lon } : {}),
       }),
       { timeoutMs: 8000 },
     );

@@ -20,6 +20,7 @@ import { DEFAULT_EXAGGERATION, DEM_SOURCE, demSourceForClient } from './lib/terr
 import { checkTomTomKey } from './lib/tomtom.js';
 import { IMAGERY_MAX_ZOOM, checkVantorKey } from './lib/vantor.js';
 import { basemapRouter } from './routes/basemap.js';
+import { structuresRouter } from './routes/structures.js';
 import { capabilitiesRouter } from './routes/capabilities.js';
 import { geocodeRouter } from './routes/geocode.js';
 import { imageryRouter } from './routes/imagery.js';
@@ -150,6 +151,7 @@ app.use('/api/capabilities', rateLimit(LIMITS.general));
 
 app.use('/api/capabilities', capabilitiesRouter);
 app.use('/api/basemap', basemapRouter);
+app.use('/api/structures', structuresRouter);
 app.use('/api/geocode', geocodeRouter);
 app.use('/api/route', routeRouter);
 app.use('/api/traffic', trafficRouter);

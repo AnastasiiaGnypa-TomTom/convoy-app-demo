@@ -522,19 +522,6 @@ h2 {
   color: var(--text-dim);
 }
 
-/* ------------------------------------------------------------- markers */
-
-.endpoint-marker {
-  width: 0.95rem;
-  height: 0.95rem;
-  border-radius: 999px 999px 999px 2px;
-  rotate: -45deg;
-  background: var(--marker-color);
-  border: 2px solid #0b1016;
-  box-shadow: 0 2px 6px rgb(0 0 0 / 0.5);
-  cursor: default;
-}
-
 /* -------------------------------------------------------- layer controls */
 
 .map-controls {
@@ -2424,3 +2411,61 @@ h2 {
 .rs-name { color: #e2e8f0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rs-at { color: #94a3b8; font-variant-numeric: tabular-nums; font-size: 0.74rem; }
 .toggle-hint { color: #7f8b99; font-style: normal; font-size: 0.72rem; }
+
+/* ───────────────────── bridge / tunnel inspector popup ───────────────────── */
+.struct-popup { min-width: 200px; font-size: 0.82rem; }
+.struct-head {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  margin-bottom: 0.45rem;
+  padding-right: 0.9rem;
+}
+.struct-head strong { font-size: 0.9rem; color: #f1f5f9; }
+.struct-badge {
+  font-size: 0.62rem;
+  letter-spacing: 0.07em;
+  font-weight: 700;
+  padding: 0.12rem 0.36rem;
+  border-radius: 4px;
+  color: #0b1016;
+}
+.struct-popup-bridge .struct-badge { background: #ec4899; }
+.struct-popup-tunnel .struct-badge { background: #a3e635; }
+.struct-rows {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.18rem 0.6rem;
+  margin: 0 0 0.5rem;
+}
+.struct-rows dt { color: #94a3b8; }
+.struct-rows dd { margin: 0; color: #e2e8f0; }
+.struct-note {
+  margin: 0;
+  padding-top: 0.42rem;
+  border-top: 1px solid var(--border);
+  color: #94a3b8;
+  font-size: 0.74rem;
+  line-height: 1.35;
+}
+.struct-note-ok { color: #86efac; }
+
+/* The POI count doubles as a "show me these" button. */
+.poi-count-btn {
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text-dim);
+  font: inherit;
+  cursor: pointer;
+  transition: color 0.12s, border-color 0.12s;
+}
+.poi-count-btn:hover:not(:disabled) {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.poi-count-btn:disabled { cursor: default; opacity: 0.5; }
+.poi-count-active {
+  color: #0b1016;
+  background: var(--accent);
+  border-color: var(--accent);
+}

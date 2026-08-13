@@ -4,7 +4,6 @@ import 'maplibre-gl/dist/maplibre-gl.css';
 import {
   LAYERS,
   bindAlternativeClicks,
-  createEndpointMarker,
   ensureRouteLayers,
   fitToRoute,
   setCongestion,
@@ -22,8 +21,10 @@ import {
 } from '../lib/overlays.js';
 import {
   bindPoiClicks,
+  ensurePoiHighlightLayer,
   ensurePoiLayers,
   setPoiData,
+  setPoiHighlight,
   setPoiVisible,
 } from '../lib/poiLayers.js';
 import { createVehiclePuckElement } from '../lib/vehicleIcons.js';
@@ -43,18 +44,25 @@ import {
   ensureDemSource,
   ensureHillshade,
   ensureSteepLayer,
+  effectiveExaggeration,
   setLayerVisibility,
   setSteepData,
 } from '../lib/terrainLayers.js';
 import { buildRouteIndex } from '../lib/navigation.js';
 import {
+  bindStructureClicks,
+  ensureExtractedLayers,
+  ensureRouteStructureLayers,
+  setRouteStructureLines,
+  setRouteStructureLinesVisible,
+  setExtractedStructures,
+  setExtractedVisible,
   ensureStructureLayers,
   setStructuresVisible,
   setRouteStructures,
   findRouteStructures,
   routeStructuresToGeoJSON,
 } from '../lib/roadStructures.js';
-import { END_COLOR, START_COLOR } from './RoutePanel.jsx';
 
 /**
  * The MapLibre canvas plus everything drawn on it.
@@ -82,8 +90,13 @@ export default function MapView({
   poiCategories,
   poiData,
   poiOn,
+  highlightedPoiLayer,
+  fitBounds,
   structuresOn,
+  extractedStructures,
+  routeStructureLines,
   onRouteStructures,
+  profileLabel,
   navigating,
   motionRef,
   navSplit,
@@ -132,7 +145,6 @@ export default function MapView({
    * immediately switch follow mode off — the camera would never follow at all.
    */
   const programmaticMoveRef = useRef(false);
-  const markersRef = useRef({ start: null, end: null });
   // Effects need the latest callbacks without re-running on every render.
   const handlers = useRef({});
   handlers.current = {
@@ -152,6 +164,10 @@ export default function MapView({
   };
   // Only refit the camera when the geometry changes, not when the selection does.
   const lastFitKey = useRef(null);
+  // Read by the structure popup; refs so the click binding survives re-renders.
+  const routeStructRef = useRef([]);
+  const profileLabelRef = useRef(null);
+  profileLabelRef.current = profileLabel || null;
 
   /* ------------------------------------------------------------ init map */
   useEffect(() => {
@@ -322,7 +338,6 @@ export default function MapView({
       map.remove();
       mapRef.current = null;
       setReady(false);
-      markersRef.current = { start: null, end: null };
     };
   }, [config, onReady]);
 
@@ -352,31 +367,6 @@ export default function MapView({
     }
     if (!key) lastFitKey.current = null;
   }, [routeData, selectedIndex, ready, navigating]);
-
-  /* ------------------------------------------------------------ markers */
-  useEffect(() => {
-    const map = mapRef.current;
-    if (!map || !ready) return;
-
-    for (const [which, point, color, title] of [
-      ['start', start, START_COLOR, 'Start'],
-      ['end', end, END_COLOR, 'Destination'],
-    ]) {
-      const existing = markersRef.current[which];
-      if (!point) {
-        existing?.remove();
-        markersRef.current[which] = null;
-        continue;
-      }
-      if (existing) {
-        existing.setLngLat([point.lon, point.lat]);
-      } else {
-        const marker = createEndpointMarker({ color, title });
-        marker.setLngLat([point.lon, point.lat]).addTo(map);
-        markersRef.current[which] = marker;
-      }
-    }
-  }, [start, end, ready]);
 
   /* --------------------------------------------------------- overlay setup */
   // Added once the sources are known. Both start hidden; the effects below
@@ -468,7 +458,25 @@ export default function MapView({
     apply();
     // styledata fires after a basemap swap; re-adding is cheap and idempotent.
     map.on('styledata', apply);
-    return () => map.off('styledata', apply);
+
+    /*
+     * Click to inspect. `onRouteAt` answers whether the clicked point lies on a
+     * structure the active route passes through, which is what lets the popup say the
+     * clearance has already been checked against the vehicle profile.
+     */
+    const unbind = bindStructureClicks(map, {
+      profileLabel: profileLabelRef.current,
+      onRouteAt: (coord) =>
+        (routeStructRef.current || []).some(
+          (s) =>
+            Math.abs(s.coord[0] - coord[0]) < 0.0025 && Math.abs(s.coord[1] - coord[1]) < 0.0025,
+        ),
+    });
+
+    return () => {
+      map.off('styledata', apply);
+      unbind();
+    };
   }, [ready, structuresOn]);
 
   /*
@@ -485,6 +493,7 @@ export default function MapView({
     const coords = route?.geometry?.coordinates;
     if (!coords?.length) {
       setRouteStructures(map, null);
+      routeStructRef.current = [];
       handlers.current.onRouteStructures?.([]);
       return;
     }
@@ -505,6 +514,7 @@ export default function MapView({
       }
       const list = [...found.values()].sort((a, b) => a.startDistance - b.startDistance);
       setRouteStructures(map, routeStructuresToGeoJSON(list));
+      routeStructRef.current = list;
       handlers.current.onRouteStructures?.(list);
     };
 
@@ -520,6 +530,73 @@ export default function MapView({
       map.off('idle', schedule);
     };
   }, [ready, routeData, selectedIndex]);
+
+  /* ------------- bridges & tunnels along the route, at any zoom ---------- */
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !ready) return;
+    const apply = () => {
+      try {
+        ensureRouteStructureLayers(map);
+        setRouteStructureLines(map, routeStructureLines);
+        setRouteStructureLinesVisible(
+          map,
+          Boolean(structuresOn && routeStructureLines?.features?.length),
+        );
+      } catch (err) {
+        console.warn('[structures/route]', err.message);
+      }
+    };
+    apply();
+    map.on('styledata', apply);
+    return () => map.off('styledata', apply);
+  }, [ready, routeStructureLines, structuresOn]);
+
+  /* ---------------- bridges & tunnels at regional zoom (server-extracted) */
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !ready) return;
+    const apply = () => {
+      try {
+        ensureExtractedLayers(map);
+        setExtractedStructures(map, extractedStructures);
+        setExtractedVisible(map, Boolean(structuresOn && extractedStructures?.features?.length));
+      } catch (err) {
+        console.warn('[structures/x]', err.message);
+      }
+    };
+    apply();
+    // Rebuilt after a basemap swap, same as the native layers.
+    map.on('styledata', apply);
+    return () => map.off('styledata', apply);
+  }, [ready, extractedStructures, structuresOn]);
+
+  /* ------------------------------------- "show me these" fit + highlight */
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !ready || !fitBounds?.bounds) return;
+    const [w, s, e, n] = fitBounds.bounds;
+    programmaticMoveRef.current = true;
+    map.fitBounds(
+      [
+        [w, s],
+        [e, n],
+      ],
+      // Generous padding, and a zoom cap so a single POI does not slam to street level.
+      { padding: 90, maxZoom: 15, duration: 900 },
+    );
+  }, [fitBounds, ready]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !ready) return;
+    try {
+      ensurePoiHighlightLayer(map);
+      setPoiHighlight(map, highlightedPoiLayer);
+    } catch (err) {
+      console.warn('[poi highlight]', err.message);
+    }
+  }, [highlightedPoiLayer, ready, poiCategories]);
 
   /* --------------------------------------------------------- infra POIs */
   useEffect(() => {
@@ -592,16 +669,39 @@ export default function MapView({
       return;
     }
 
+    let applied = null;
+
+    /*
+     * Re-applied on zoom, because the effective value depends on it.
+     *
+     * MapLibre takes exaggeration as a plain number, not a zoom expression, so the
+     * compensation has to be recomputed as the camera moves. Quantised to 0.05 and
+     * compared against the last applied value, so a continuous pinch-zoom triggers a
+     * handful of setTerrain calls rather than one per frame.
+     */
+    const applyTerrain = () => {
+      const target = is3D
+        ? Math.round(effectiveExaggeration(exaggeration, map.getZoom()) * 20) / 20
+        : 1;
+      if (applied !== null && Math.abs(target - applied) < 0.05) return;
+      applied = target;
+      map.setTerrain({ source: DEM_SOURCE_ID, exaggeration: target });
+    };
+
     try {
       ensureDemSource(map, terrainSourceDef);
       ensureHillshade(map);
       ensureSteepLayer(map);
-      map.setTerrain({ source: DEM_SOURCE_ID, exaggeration: is3D ? exaggeration : 1 });
+      applyTerrain();
       handlers.current.onTerrainReady?.(true);
     } catch (err) {
       console.warn('[terrain]', err.message);
       handlers.current.onTerrainReady?.(false);
+      return;
     }
+
+    map.on('zoom', applyTerrain);
+    return () => map.off('zoom', applyTerrain);
   }, [ready, terrainAvailable, terrainSourceDef, is3D, exaggeration]);
 
   // Pitch is the camera's business; the controller owns it.
@@ -611,11 +711,34 @@ export default function MapView({
     camera.setPitch(is3D ? (window.matchMedia('(max-width: 760px)').matches ? 50 : 60) : 0);
   }, [is3D, ready, navigating]);
 
+  /*
+   * Re-applied on styledata, not just when the toggle changes.
+   *
+   * A basemap swap replaces the whole style, so the hillshade layer is rebuilt with its
+   * creation default of hidden — and this effect would not re-run, because none of its
+   * deps changed. The visible result was hillshade silently disappearing the moment you
+   * switched to Satellite, which looked like the feature had been removed.
+   */
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !ready) return;
-    setLayerVisibility(map, HILLSHADE_LAYER, Boolean(hillshadeOn && terrainAvailable));
-  }, [hillshadeOn, terrainAvailable, ready]);
+
+    const apply = () => {
+      try {
+        if (terrainSourceDef) {
+          ensureDemSource(map, terrainSourceDef);
+          ensureHillshade(map);
+        }
+        setLayerVisibility(map, HILLSHADE_LAYER, Boolean(hillshadeOn && terrainAvailable));
+      } catch (err) {
+        console.warn('[hillshade]', err.message);
+      }
+    };
+
+    apply();
+    map.on('styledata', apply);
+    return () => map.off('styledata', apply);
+  }, [hillshadeOn, terrainAvailable, terrainSourceDef, ready]);
 
   // Steep stretches over the vehicle's grade limit.
   useEffect(() => {

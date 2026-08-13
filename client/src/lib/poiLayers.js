@@ -28,7 +28,15 @@ export const POI_LAYERS = {
  * the feature it marks and the map turns to soup. Dots stay visible at every zoom
  * the data loads at, so the layer never looks empty just because it is zoomed out.
  */
-const ICON_MIN_ZOOM = 9;
+/*
+ * Icons carry the category letter, plain dots do not.
+ *
+ * This was 9, so anything wider than city scale showed featureless coloured circles —
+ * you could see that something was there but not what. Lowered to 7 and the icon scaled
+ * down to match, so the letter is legible at regional zoom instead of a blob. The dot
+ * layer is kept only below that, where even a small icon would be noise.
+ */
+const ICON_MIN_ZOOM = 7;
 
 const EMPTY = { type: 'FeatureCollection', features: [] };
 
@@ -58,11 +66,16 @@ export function ensurePoiLayers(map, categories) {
     maxzoom: ICON_MIN_ZOOM,
     layout: { visibility: 'none' },
     paint: {
-      'circle-radius': ['interpolate', ['linear'], ['zoom'], 5, 4.5, 8, 6.5, ICON_MIN_ZOOM, 8.5],
+      'circle-radius': ['interpolate', ['linear'], ['zoom'], 4, 2.6, 6, 3.4, ICON_MIN_ZOOM, 4.2],
       'circle-color': color,
-      'circle-stroke-width': 2,
+      'circle-stroke-width': 1.2,
       'circle-stroke-color': 'rgba(11,16,22,0.9)',
       'circle-opacity': 0.95,
+      // Fade in. New POIs arriving mid-pan used to appear instantly, which reads as a
+      // flicker; a short ramp makes the same update feel like settling rather than
+      // reloading. Paint transitions are per-property, hence the -transition keys.
+      'circle-opacity-transition': { duration: 320, delay: 0 },
+      'circle-stroke-opacity-transition': { duration: 320, delay: 0 },
     },
   });
 
@@ -76,10 +89,49 @@ export function ensurePoiLayers(map, categories) {
     layout: {
       visibility: 'none',
       'icon-image': ['concat', 'poi-icon-', ['get', 'layer']],
-      'icon-size': ['interpolate', ['linear'], ['zoom'], ICON_MIN_ZOOM, 0.85, 13, 1.05, 16, 1.35],
+      /*
+       * Sized so the letter is readable at every zoom, and clearly larger as you zoom in.
+       *
+       * The old ramp started at 0.5 and only reached 0.62 by z9, which at a regional view
+       * rendered as anonymous coloured dots — the category letter was there but far too
+       * small to read, so the layers were indistinguishable from each other.
+       */
+      /*
+       * Target on-screen diameters, against the 48 px logical base (see poiIcons.js):
+       *   z9  ~22 px   regional — letter readable
+       *   z12 ~30 px   city
+       *   z14 ~38 px
+       *   z16 ~46 px   street level
+       * Expressed as fractions of the base rather than round numbers so the intent
+       * survives a change to the bitmap size.
+       */
+      'icon-size': [
+        'interpolate',
+        ['linear'],
+        ['zoom'],
+        ICON_MIN_ZOOM,
+        0.42,
+        9,
+        0.46,
+        12,
+        0.63,
+        14,
+        0.79,
+        16,
+        0.96,
+        18,
+        1.1,
+      ],
       'icon-allow-overlap': true,
       'icon-ignore-placement': true,
       'icon-anchor': 'center',
+    },
+    paint: {
+      // Fade in. New POIs arriving after a pan used to appear instantly, which reads as
+      // a flicker; a short ramp makes an update feel like settling rather than
+      // reloading. Transitions are per-property, hence the -transition key.
+      'icon-opacity': 1,
+      'icon-opacity-transition': { duration: 320, delay: 0 },
     },
   });
 
@@ -111,6 +163,7 @@ export function ensurePoiLayers(map, categories) {
     },
     paint: {
       'text-color': '#f0f6fc',
+      'text-opacity-transition': { duration: 320, delay: 0 },
       'text-halo-color': '#0b1016',
       'text-halo-width': 1.8,
     },
@@ -196,4 +249,40 @@ export function bindPoiClicks(map, getCategoryLabel, onSelect) {
     }
     popup?.remove();
   };
+}
+
+/* ──────────────────── "show me these" highlight ──────────────────── */
+
+export const POI_HIGHLIGHT_LAYER = 'infra-poi-highlight';
+
+/**
+ * A ring drawn behind the POIs of one layer.
+ *
+ * Sits UNDER the icons so it frames them rather than covering them, and it is a
+ * separate layer rather than a paint change on the existing ones — that way turning the
+ * highlight on and off cannot disturb the normal styling or the click targets.
+ */
+export function ensurePoiHighlightLayer(map) {
+  if (map.getLayer(POI_HIGHLIGHT_LAYER) || !map.getSource(POI_SOURCE)) return;
+  map.addLayer(
+    {
+      id: POI_HIGHLIGHT_LAYER,
+      type: 'circle',
+      source: POI_SOURCE,
+      // Matches nothing until a layer is chosen.
+      filter: ['==', ['get', 'layer'], '__none__'],
+      paint: {
+        'circle-radius': ['interpolate', ['linear'], ['zoom'], 8, 10, 14, 20],
+        'circle-color': 'rgba(56,189,248,0.18)',
+        'circle-stroke-width': 2.5,
+        'circle-stroke-color': '#38bdf8',
+      },
+    },
+    map.getLayer(POI_LAYERS.dot) ? POI_LAYERS.dot : undefined,
+  );
+}
+
+export function setPoiHighlight(map, layerId) {
+  if (!map.getLayer(POI_HIGHLIGHT_LAYER)) return;
+  map.setFilter(POI_HIGHLIGHT_LAYER, ['==', ['get', 'layer'], layerId || '__none__']);
 }

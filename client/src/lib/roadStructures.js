@@ -1,3 +1,4 @@
+import maplibregl from 'maplibre-gl';
 /**
  * Bridges and tunnels, from TomTom's ROAD data rather than POIs.
  *
@@ -46,6 +47,39 @@ const TUNNEL_COLOR = '#a3e635';
  * which an individual bridge would be sub-pixel anyway.
  */
 export const STRUCTURE_MINZOOM = 12;
+
+/**
+ * Below this zoom, only structures that matter at a glance are drawn.
+ *
+ * Showing every bridge from z12 up was right for the Alps and wrong for a canal city:
+ * one Utrecht view holds several hundred short bridges and the map became a pink rash.
+ * A motorway tunnel and a 15 m footbridge are both "a structure", so zoom alone cannot
+ * separate them — size and road class can.
+ */
+export const ALL_STRUCTURES_ZOOM = 13.5;
+
+/** True for structures worth drawing at a wide view. */
+const IS_MAJOR = [
+  'any',
+  ['match', ['get', 'category'], ['motorway', 'trunk', 'primary'], true, false],
+  ['>=', ['coalesce', ['get', 'length_m'], 0], 200],
+];
+
+/**
+ * Opacity that fades minor structures in only once close enough.
+ *
+ * Done with opacity rather than a filter so there is one layer per kind instead of two,
+ * and so the appearance is a fade rather than a pop as you cross the threshold.
+ */
+const significanceOpacity = (full) => [
+  'interpolate',
+  ['linear'],
+  ['zoom'],
+  STRUCTURE_MINZOOM,
+  ['case', IS_MAJOR, full, 0],
+  ALL_STRUCTURES_ZOOM,
+  full,
+];
 
 const BASEMAP_SOURCE = 'vectorTiles';
 
@@ -128,7 +162,7 @@ export function ensureStructureLayers(map) {
      * casing underneath.
      */
     'line-width': width(base * 1.9),
-    'line-opacity': ['interpolate', ['linear'], ['zoom'], 12, 0.3, 15, 0.16],
+    'line-opacity': ['interpolate', ['linear'], ['zoom'], 12, ['case', IS_MAJOR, 0.3, 0], 13.5, 0.3, 15, 0.16],
     'line-blur': ['interpolate', ['linear'], ['zoom'], 12, 3, 16, 2],
   });
 
@@ -169,7 +203,7 @@ export function ensureStructureLayers(map) {
       minzoom: STRUCTURE_MINZOOM,
       filter: ['==', ['get', 'bridge'], true],
       layout: { visibility: 'none', 'line-cap': 'butt', 'line-join': 'round' },
-      paint: { 'line-color': '#0b1016', 'line-width': width(9), 'line-opacity': 0.7 },
+      paint: { 'line-color': '#0b1016', 'line-width': width(9), 'line-opacity': significanceOpacity(0.7) },
     },
     beforeId,
   );
@@ -183,7 +217,7 @@ export function ensureStructureLayers(map) {
       minzoom: STRUCTURE_MINZOOM,
       filter: ['==', ['get', 'bridge'], true],
       layout: { visibility: 'none', 'line-cap': 'butt', 'line-join': 'round' },
-      paint: { 'line-color': BRIDGE_COLOR, 'line-width': width(4.5), 'line-opacity': 1 },
+      paint: { 'line-color': BRIDGE_COLOR, 'line-width': width(4.5), 'line-opacity': significanceOpacity(1) },
     },
     beforeId,
   );
@@ -200,7 +234,7 @@ export function ensureStructureLayers(map) {
       paint: {
         'line-color': TUNNEL_COLOR,
         'line-width': width(4),
-        'line-opacity': 0.98,
+        'line-opacity': significanceOpacity(0.98),
         // Dashed: a tunnel is road you cannot see.
         'line-dasharray': [1.6, 1.1],
       },
@@ -439,4 +473,399 @@ export function routeStructuresToGeoJSON(structures) {
       },
     })),
   };
+}
+
+/* ────────────────────────── click to inspect a structure ─────────────────── */
+
+const R_EARTH = 6371000;
+function metresBetween([lo1, la1], [lo2, la2]) {
+  const dLa = ((la2 - la1) * Math.PI) / 180;
+  const dLo = ((lo2 - lo1) * Math.PI) / 180;
+  const m1 = (la1 * Math.PI) / 180;
+  const m2 = (la2 * Math.PI) / 180;
+  const a = Math.sin(dLa / 2) ** 2 + Math.cos(m1) * Math.cos(m2) * Math.sin(dLo / 2) ** 2;
+  return 2 * R_EARTH * Math.asin(Math.sqrt(a));
+}
+
+function geometryLength(geometry) {
+  const parts =
+    geometry.type === 'MultiLineString' ? geometry.coordinates : [geometry.coordinates || []];
+  let total = 0;
+  for (const part of parts) {
+    for (let i = 1; i < part.length; i++) total += metresBetween(part[i - 1], part[i]);
+  }
+  return total;
+}
+
+/** Human labels for the road classes TomTom uses. */
+const ROAD_CLASS = {
+  motorway: 'Motorway',
+  trunk: 'Trunk road',
+  primary: 'Primary road',
+  secondary: 'Secondary road',
+  tertiary: 'Minor road',
+  street: 'Street',
+  service: 'Service road',
+  track: 'Track',
+  path: 'Path',
+  pedestrian: 'Pedestrian way',
+  bus: 'Bus road',
+  railway: 'Railway',
+};
+
+/**
+ * Everything we can honestly say about one structure.
+ *
+ * ── What is NOT here, and why ─────────────────────────────────────────────
+ * There is no clearance, weight limit, width or axle rating. Not omitted for brevity —
+ * those fields do not exist. Every property present on bridge/tunnel features was
+ * dumped across five cities and the complete set is: bridge, tunnel, name, name_en,
+ * category, subcategory, display_class, z_level, route_number/route_shield_*, toll,
+ * covered, service, access, unpaved, under_construction, grade. Nothing dimensional.
+ *
+ * So this reports what the map actually knows, and says plainly that limits are not in
+ * the data rather than inventing a number a convoy planner might act on.
+ *
+ * Length IS real: computed from the feature geometry. Vector tiles clip features at
+ * tile edges, so a long span arrives in pieces; pieces of the same named road are summed
+ * to get the whole structure, and the result is reported as approximate because tile
+ * buffers overlap very slightly.
+ */
+export function describeStructure(map, feature) {
+  const p = feature.properties || {};
+  const kind = p.tunnel === true ? 'tunnel' : 'bridge';
+  const name = p.name || p.name_en || null;
+
+  // Sum every loaded piece of the same named structure, not just the clicked fragment.
+  let lengthM = geometryLength(feature.geometry);
+  let pieces = 1;
+  if (name) {
+    try {
+      const all = map
+        .querySourceFeatures(BASEMAP_SOURCE, { sourceLayer: feature.sourceLayer || 'roads' })
+        .filter(
+          (f) =>
+            (f.properties?.name || f.properties?.name_en) === name &&
+            (kind === 'tunnel' ? f.properties?.tunnel === true : f.properties?.bridge === true),
+        );
+      if (all.length) {
+        lengthM = all.reduce((sum, f) => sum + geometryLength(f.geometry), 0);
+        pieces = all.length;
+      }
+    } catch {
+      /* fall back to the clicked fragment */
+    }
+  }
+
+  const routeNumber = p.route_number || p.route_shield_text || p.route_shield_text_1 || null;
+
+  return {
+    kind,
+    name,
+    routeNumber,
+    roadClass: ROAD_CLASS[p.category] || p.category || null,
+    subcategory: p.subcategory || null,
+    lengthM,
+    pieces,
+    // z_level is how many levels this sits above (or below) the surrounding ground.
+    level: typeof p.z_level === 'number' ? p.z_level : null,
+    toll: p.toll === true,
+    covered: p.covered === true,
+    unpaved: p.unpaved === true,
+    underConstruction: p.under_construction === true,
+    access: p.access || null,
+  };
+}
+
+const esc = (s) =>
+  String(s).replace(
+    /[&<>"]/g,
+    (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c],
+  );
+
+export function structurePopupHTML(info, { profileLabel = null, onRoute = false } = {}) {
+  const title = info.name || (info.kind === 'tunnel' ? 'Tunnel' : 'Bridge');
+  const rows = [];
+
+  if (info.roadClass) {
+    rows.push(['Road', info.routeNumber ? `${info.roadClass} · ${info.routeNumber}` : info.roadClass]);
+  } else if (info.routeNumber) {
+    rows.push(['Road', info.routeNumber]);
+  }
+  if (info.lengthM >= 20) {
+    const len =
+      info.lengthM >= 1000
+        ? `${(info.lengthM / 1000).toFixed(1)} km`
+        : `${Math.round(info.lengthM / 10) * 10} m`;
+    rows.push(['Length', `~${len}`]);
+  }
+  if (info.level) {
+    rows.push(['Level', info.level > 0 ? `${info.level} above ground` : `${-info.level} below ground`]);
+  }
+  const flags = [
+    info.toll && 'Toll',
+    info.covered && 'Covered',
+    info.unpaved && 'Unpaved',
+    info.underConstruction && 'Under construction',
+  ].filter(Boolean);
+  if (flags.length) rows.push(['Notes', flags.join(' · ')]);
+
+  /*
+   * The clearance line is the point of this popup for a convoy planner, so it is stated
+   * rather than left as an absence. When the structure is on the active route we can say
+   * something genuinely useful: the route was calculated WITH the vehicle's height and
+   * weight, so TomTom's routing engine already rejected anything the vehicle cannot pass.
+   * That is a real guarantee. Off-route we can only say the data does not carry limits.
+   */
+  const clearance = onRoute
+    ? `<p class="struct-note struct-note-ok">Checked for <strong>${esc(profileLabel || 'your vehicle')}</strong> — TomTom routed with your height and weight, so this is passable.</p>`
+    : `<p class="struct-note">No clearance or weight limit in the map data. Plan a route with your vehicle profile to have it checked.</p>`;
+
+  return `
+    <div class="struct-popup struct-popup-${info.kind}">
+      <div class="struct-head">
+        <span class="struct-badge">${info.kind === 'tunnel' ? 'TUNNEL' : 'BRIDGE'}</span>
+        <strong>${esc(title)}</strong>
+      </div>
+      ${rows.length ? `<dl class="struct-rows">${rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('')}</dl>` : ''}
+      ${clearance}
+    </div>`;
+}
+
+/**
+ * Click a bridge or tunnel to inspect it.
+ *
+ * Bound to the two line layers only. A POI symbol sitting on top of a bridge wins —
+ * the place card is the more specific intent, and two panels opening from one click is
+ * worse than either. `onRouteAt` lets the caller say whether this point is on the active
+ * route, which changes the clearance line from "unknown" to "already checked".
+ */
+export function bindStructureClicks(map, { onRouteAt = null, profileLabel = null } = {}) {
+  let popup = null;
+  const layers = [STRUCTURE_LAYERS.bridge, STRUCTURE_LAYERS.tunnel];
+
+  const onClick = (e) => {
+    const f = e.features?.[0];
+    if (!f) return;
+
+    // Defer to a POI if one is under the cursor.
+    const poiLayers = ['infra-poi-icon', 'infra-poi-dot'].filter((l) => map.getLayer(l));
+    if (poiLayers.length && map.queryRenderedFeatures(e.point, { layers: poiLayers }).length) return;
+
+    const info = describeStructure(map, f);
+    const onRoute = onRouteAt ? onRouteAt([e.lngLat.lng, e.lngLat.lat]) : false;
+    popup?.remove();
+    popup = new maplibregl.Popup({ closeButton: true, maxWidth: '280px' })
+      .setLngLat(e.lngLat)
+      .setHTML(structurePopupHTML(info, { profileLabel, onRoute }))
+      .addTo(map);
+  };
+
+  const enter = () => {
+    map.getCanvas().style.cursor = 'pointer';
+  };
+  const leave = () => {
+    map.getCanvas().style.cursor = '';
+  };
+
+  for (const l of layers) {
+    if (!map.getLayer(l)) continue;
+    map.on('click', l, onClick);
+    map.on('mouseenter', l, enter);
+    map.on('mouseleave', l, leave);
+  }
+
+  return () => {
+    for (const l of layers) {
+      if (!map.getLayer(l)) continue;
+      map.off('click', l, onClick);
+      map.off('mouseenter', l, enter);
+      map.off('mouseleave', l, leave);
+    }
+    popup?.remove();
+  };
+}
+
+/* ─────────── regional zoom: structures extracted server-side ─────────── */
+
+const EXTRACTED_SOURCE = 'struct-extracted-src';
+export const EXTRACTED_LAYERS = {
+  glow: 'struct-x-glow',
+  casing: 'struct-x-casing',
+  bridge: 'struct-x-bridge',
+  tunnel: 'struct-x-tunnel',
+};
+
+/** The zoom below which the server route refuses (too many source tiles). */
+export const EXTRACTED_MIN_ZOOM = 10;
+
+/**
+ * Layers for the GeoJSON that /api/structures returns.
+ *
+ * Styled to match the native vector-tile layers exactly, and capped at maxzoom
+ * STRUCTURE_MINZOOM so the two never draw at once: below z12 these are the only source,
+ * at z12 and above the tiles carry the attributes and the free path takes over.
+ */
+export function ensureExtractedLayers(map) {
+  if (map.getLayer(EXTRACTED_LAYERS.bridge)) return;
+  if (!map.getSource(EXTRACTED_SOURCE)) {
+    map.addSource(EXTRACTED_SOURCE, { type: 'geojson', data: EMPTY });
+  }
+
+  let beforeId;
+  for (const l of map.getStyle().layers || []) {
+    if (l.type === 'symbol') {
+      beforeId = l.id;
+      break;
+    }
+  }
+
+  // At regional zoom lines must be a touch heavier to read at all.
+  const w = (base) => ['interpolate', ['linear'], ['zoom'], 10, base * 1.5, 12, base * 1.6];
+  const max = STRUCTURE_MINZOOM;
+
+  const add = (id, paint, extra = {}) =>
+    map.addLayer(
+      {
+        id,
+        type: 'line',
+        source: EXTRACTED_SOURCE,
+        maxzoom: max,
+        layout: { visibility: 'none', 'line-cap': 'round', 'line-join': 'round' },
+        paint,
+        ...extra,
+      },
+      beforeId,
+    );
+
+  add(
+    EXTRACTED_LAYERS.glow,
+    {
+      'line-color': ['match', ['get', 'kind'], 'tunnel', TUNNEL_COLOR, BRIDGE_COLOR],
+      'line-width': w(8),
+      'line-opacity': 0.32,
+      'line-blur': 3,
+    },
+    { filter: IS_MAJOR },
+  );
+  add(
+    EXTRACTED_LAYERS.casing,
+    { 'line-color': '#0b1016', 'line-width': w(5.5), 'line-opacity': 0.65 },
+    { filter: IS_MAJOR },
+  );
+  // Regional zoom shows only what reads at that scale — see ALL_STRUCTURES_ZOOM.
+  add(
+    EXTRACTED_LAYERS.bridge,
+    { 'line-color': BRIDGE_COLOR, 'line-width': w(3), 'line-opacity': 1 },
+    { filter: ['all', ['==', ['get', 'kind'], 'bridge'], IS_MAJOR] },
+  );
+  add(
+    EXTRACTED_LAYERS.tunnel,
+    {
+      'line-color': TUNNEL_COLOR,
+      'line-width': w(2.8),
+      'line-opacity': 0.98,
+      'line-dasharray': [1.6, 1.1],
+    },
+    { filter: ['all', ['==', ['get', 'kind'], 'tunnel'], IS_MAJOR] },
+  );
+}
+
+export function setExtractedStructures(map, fc) {
+  map.getSource(EXTRACTED_SOURCE)?.setData(fc || EMPTY);
+}
+
+export function setExtractedVisible(map, visible) {
+  for (const id of Object.values(EXTRACTED_LAYERS)) {
+    if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', visible ? 'visible' : 'none');
+  }
+}
+
+/* ──────── structures along the active route, visible at ANY zoom ──────── */
+
+const ROUTE_LINE_SOURCE = 'struct-route-src';
+export const ROUTE_STRUCT_LAYERS = {
+  glow: 'struct-r-glow',
+  casing: 'struct-r-casing',
+  bridge: 'struct-r-bridge',
+  tunnel: 'struct-r-tunnel',
+};
+
+/**
+ * Layers for /api/structures/along-route.
+ *
+ * Deliberately have NO maxzoom, unlike the viewport-extracted layers. A route corridor
+ * costs tiles proportional to its length rather than to how far the camera is zoomed out,
+ * so there is no reason to hide the tunnels on the road you are about to drive just
+ * because you are looking at the whole country.
+ *
+ * They still respect the significance rule, so a wide view shows the motorway tunnels
+ * rather than every farm-track culvert the route passes.
+ */
+export function ensureRouteStructureLayers(map) {
+  if (map.getLayer(ROUTE_STRUCT_LAYERS.bridge)) return;
+  if (!map.getSource(ROUTE_LINE_SOURCE)) {
+    map.addSource(ROUTE_LINE_SOURCE, { type: 'geojson', data: EMPTY });
+  }
+
+  let beforeId;
+  for (const l of map.getStyle().layers || []) {
+    if (l.type === 'symbol') {
+      beforeId = l.id;
+      break;
+    }
+  }
+
+  // Slightly heavier than the basemap versions: these are the ones that matter.
+  const w = (base) => ['interpolate', ['linear'], ['zoom'], 8, base * 1.2, 11, base * 1.6, 15, base];
+
+  const add = (id, paint, filter) =>
+    map.addLayer(
+      {
+        id,
+        type: 'line',
+        source: ROUTE_LINE_SOURCE,
+        layout: { visibility: 'none', 'line-cap': 'round', 'line-join': 'round' },
+        paint,
+        ...(filter ? { filter } : {}),
+      },
+      beforeId,
+    );
+
+  add(ROUTE_STRUCT_LAYERS.glow, {
+    'line-color': ['match', ['get', 'kind'], 'tunnel', TUNNEL_COLOR, BRIDGE_COLOR],
+    'line-width': w(9),
+    'line-opacity': significanceOpacity(0.3),
+    'line-blur': 3,
+  });
+  add(ROUTE_STRUCT_LAYERS.casing, {
+    'line-color': '#0b1016',
+    'line-width': w(6),
+    'line-opacity': significanceOpacity(0.6),
+  });
+  add(
+    ROUTE_STRUCT_LAYERS.bridge,
+    { 'line-color': BRIDGE_COLOR, 'line-width': w(3.4), 'line-opacity': significanceOpacity(1) },
+    ['==', ['get', 'kind'], 'bridge'],
+  );
+  add(
+    ROUTE_STRUCT_LAYERS.tunnel,
+    {
+      'line-color': TUNNEL_COLOR,
+      'line-width': w(3.2),
+      'line-opacity': significanceOpacity(1),
+      'line-dasharray': [1.6, 1.1],
+    },
+    ['==', ['get', 'kind'], 'tunnel'],
+  );
+}
+
+export function setRouteStructureLines(map, fc) {
+  map.getSource(ROUTE_LINE_SOURCE)?.setData(fc || EMPTY);
+}
+
+export function setRouteStructureLinesVisible(map, visible) {
+  for (const id of Object.values(ROUTE_STRUCT_LAYERS)) {
+    if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', visible ? 'visible' : 'none');
+  }
 }

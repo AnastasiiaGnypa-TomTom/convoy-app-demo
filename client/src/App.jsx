@@ -183,7 +183,17 @@ export default function App() {
   const [terrainMeta, setTerrainMeta] = useState(null);
   const [terrainReady, setTerrainReady] = useState(false);
   const [exaggeration, setExaggeration] = useState(1.4);
-  const [hillshadeOn, setHillshadeOn] = useState(false);
+  /*
+   * Hillshade ON by default.
+   *
+   * This was off, and it was the real reason terrain "did not show up until you were
+   * zoomed right in": the DEM was loaded and exaggerated the whole time, but a flat
+   * vector basemap gives the eye no light or shadow to read height from, so correct
+   * geometry still looked flat. Only when zoomed in far enough for the horizon and
+   * perspective to give the cue did it appear. Shading is what makes relief visible,
+   * so it should not be something you have to find and switch on.
+   */
+  const [hillshadeOn, setHillshadeOn] = useState(true);
   /*
    * Two distinct 3D looks, mutually exclusive:
    *   'terrain'   — satellite draped over the DEM. Right for hills.
@@ -213,6 +223,14 @@ export default function App() {
   const [prefetch, setPrefetch] = useState(null);
 
   const [poiLayerDefs, setPoiLayerDefs] = useState(null);
+  /** Which POI layer is currently being pointed out on the map, if any. */
+  const [highlightedPoiLayer, setHighlightedPoiLayer] = useState(null);
+  /** One-shot camera fit request: { bounds, token }. */
+  const [fitBounds, setFitBounds] = useState(null);
+  /** Bridges/tunnels extracted server-side, for zooms below the tile floor. */
+  const [extractedStructures, setExtractedStructures] = useState(null);
+  /** Structures along the active route — fetched once per route, shown at any zoom. */
+  const [routeStructureLines, setRouteStructureLines] = useState(null);
   /*
    * Bridges & tunnels come from the basemap road data, not from POIs, so there is no
    * fetch to wait on and nothing to rate-limit — which is why this one can default to
@@ -226,7 +244,8 @@ export default function App() {
   const [poiSelected, setPoiSelected] = useState([]);
   const [poiData, setPoiData] = useState(null);
   const [poiLoading, setPoiLoading] = useState(false);
-  const [corridorKm, setCorridorKm] = useState(5);
+  // 8.05 km = 5 miles either side of the route; the server is the authority.
+  const [corridorKm, setCorridorKm] = useState(8.05);
 
   const [imageryMode, setImageryMode] = useState(null);
   // What is actually rendered: seamless falls back to latest where no mosaic exists.
@@ -414,6 +433,47 @@ export default function App() {
     };
   }, [imageryOn, bounds, imageryMeta, imageryMode]);
 
+  // The highlight is a gesture, not a mode: it fades on its own.
+  useEffect(() => {
+    if (!highlightedPoiLayer) return;
+    const id = setTimeout(() => setHighlightedPoiLayer(null), 6000);
+    return () => clearTimeout(id);
+  }, [highlightedPoiLayer]);
+
+  /*
+   * Below zoom 12 the basemap tiles no longer carry bridge/tunnel attributes, so the
+   * client cannot draw them from the tiles it already has. /api/structures reads deeper
+   * tiles server-side and returns just the geometry. Fetched only in the band where it
+   * is both needed and affordable (z9.5 to z12); above z12 the free tile path is used and
+   * this stays untouched.
+   */
+  useEffect(() => {
+    if (!structuresOn || !bounds || zoom == null) return;
+    if (zoom >= 12 || zoom < 9.5) {
+      setExtractedStructures(null);
+      return;
+    }
+
+    const ctl = new AbortController();
+    const timer = setTimeout(() => {
+      const [w, s2, e, n] = bounds;
+      fetch(`/api/structures?bbox=${w.toFixed(4)},${s2.toFixed(4)},${e.toFixed(4)},${n.toFixed(4)}&zoom=${zoom.toFixed(1)}`,
+        { signal: ctl.signal })
+        .then((r) => (r.ok ? r.json() : null))
+        .then((fc) => {
+          if (fc) setExtractedStructures(fc);
+        })
+        .catch((err) => {
+          if (err.name !== 'AbortError') console.warn('[structures]', err.message);
+        });
+    }, 400);
+
+    return () => {
+      clearTimeout(timer);
+      ctl.abort();
+    };
+  }, [structuresOn, bounds, zoom]);
+
   /* ------------------------------------------------------------- POI layers */
   /*
    * With an active route, POIs come from search-along-route inside the convoy
@@ -425,12 +485,111 @@ export default function App() {
     routeData?.routes?.features?.find((f) => f.properties.index === (selectedIndex ?? 0))?.geometry
       ?.coordinates || null;
 
+  /*
+   * Structures along the active route. Fetched once per route — NOT on pan or zoom,
+   * because a corridor does not depend on where the camera is looking.
+   */
+  useEffect(() => {
+    if (!structuresOn || !selectedRouteCoords?.length) {
+      setRouteStructureLines(null);
+      return;
+    }
+    const ctl = new AbortController();
+    const timer = setTimeout(() => {
+      fetch('/api/structures/along-route', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          route: selectedRouteCoords.map(([lon, lat]) => ({ lat, lon })),
+          corridorM: 1200,
+        }),
+        signal: ctl.signal,
+      })
+        .then((r) => (r.ok ? r.json() : null))
+        .then((fc) => {
+          if (fc) setRouteStructureLines(fc);
+        })
+        .catch((err) => {
+          if (err.name !== 'AbortError') console.warn('[structures/route]', err.message);
+        });
+    }, 300);
+    return () => {
+      clearTimeout(timer);
+      ctl.abort();
+    };
+  }, [structuresOn, selectedRouteCoords]);
+
+  /*
+   * ── Why this is not simply "fetch on every bounds change" ────────────────
+   * It was, and dragging the map felt like it: every pan fired a request, the whole
+   * feature set was replaced, and the icons blinked out and back. Three fixes, in order
+   * of how much they matter:
+   *
+   *  1. Fetch a PADDED box, then skip the request entirely while the viewport stays
+   *     inside what was already fetched. Small and medium pans now need no request at
+   *     all — the POIs just stay put, which is the behaviour that actually feels right.
+   *  2. With a route active the query is search-along-route and does not depend on the
+   *     viewport at all, so panning must not refetch it. Previously it did, on every
+   *     single moveend, re-requesting an identical result.
+   *  3. Never clear what is on screen. The old code replaced the data on failure and on
+   *     every new request, so a transient error emptied the map.
+   */
+  const poiFetchRef = useRef({ box: null, key: null, zoom: null });
+
   useEffect(() => {
     if (!poiOn || !poiSelected.length) {
       setPoiData(null);
+      poiFetchRef.current = { box: null, key: null, zoom: null };
       return;
     }
     if (!selectedRouteCoords && !bounds) return;
+
+    // Identifies the query apart from the viewport.
+    const key = `${[...poiSelected].sort().join(',')}|${selectedRouteCoords ? `route:${corridorKm}` : 'view'}`;
+    const prev = poiFetchRef.current;
+
+    if (key === prev.key) {
+      // Route mode: viewport is not an input, so nothing to do.
+      if (selectedRouteCoords) return;
+      /*
+       * Browse mode: skip only if the view is still covered AND at a similar scale.
+       *
+       * "Covered" alone is not enough, and assuming it was is what left cities empty.
+       * The per-layer cap is spent across whatever area was requested, so a box fetched
+       * at z9 holds POIs scattered over a whole region; zooming to a city inside that
+       * box is still "covered" while containing almost nothing. Zooming in by more than
+       * a level therefore has to refetch, because the same cap now buys far more detail.
+       */
+      if (prev.box && bounds && prev.zoom != null && zoom != null) {
+        const [w, s2, e, n] = bounds;
+        const [W, S, E, N] = prev.box;
+        const covered = w >= W && s2 >= S && e <= E && n <= N;
+        const similarScale = zoom <= prev.zoom + 1;
+        if (covered && similarScale) return;
+      }
+    }
+
+    /*
+     * Pad the request beyond the visible window so there is fresh data ready just off
+     * screen.
+     *
+     * Reduced from 45% to 25%. Padding is not free: the per-layer cap is spent over the
+     * whole requested box, so a big pad thins out the POIs actually visible on screen.
+     * 25% still absorbs ordinary small pans without a request.
+     */
+    const padded = bounds
+      ? (() => {
+          const [w, s2, e, n] = bounds;
+          const dx = (e - w) * 0.25;
+          const dy = (n - s2) * 0.25;
+          return [
+            Math.max(-180, w - dx),
+            Math.max(-85, s2 - dy),
+            Math.min(180, e + dx),
+            Math.min(85, n + dy),
+          ];
+        })()
+      : null;
 
     const ctl = new AbortController();
     const timer = setTimeout(() => {
@@ -444,21 +603,75 @@ export default function App() {
             },
             { signal: ctl.signal },
           )
-        : fetchPois(bounds, poiSelected, { signal: ctl.signal });
+        : fetchPois(padded, poiSelected, { signal: ctl.signal });
 
       request
-        .then(setPoiData)
+        .then((data) => {
+          setPoiData(data);
+          poiFetchRef.current = { box: selectedRouteCoords ? null : padded, key, zoom };
+        })
         .catch((err) => {
-          if (err.name !== 'AbortError') setPoiData(null);
+          // Keep whatever is already drawn; an empty map is worse than stale POIs.
+          if (err.name !== 'AbortError') console.warn('[pois]', err.message);
         })
         .finally(() => setPoiLoading(false));
-    }, 700);
+    }, 350);
 
     return () => {
       clearTimeout(timer);
       ctl.abort();
     };
-  }, [poiOn, poiSelected, bounds, selectedRouteCoords, corridorKm]);
+  }, [poiOn, poiSelected, bounds, zoom, selectedRouteCoords, corridorKm]);
+
+  /**
+   * "Show me these" — frames the POIs of one layer and marks them.
+   *
+   * Counts are computed from the loaded features, so the same features can be used to
+   * fit the camera; there is nothing to re-fetch. The highlight clears itself, because
+   * a marker that stays on forever stops meaning "these ones".
+   */
+  /**
+   * "Show me these" — highlight the layer's POIs, in place.
+   *
+   * Deliberately does NOT move the camera when any of them are already on screen. It used
+   * to fit the bounds of every feature in the layer, which meant clicking the count while
+   * zoomed into a city threw the view back out to the whole region — the opposite of what
+   * you want when you are asking "which of these on my screen are the fuel stations".
+   * The camera only moves when none are visible, which is the one case where a highlight
+   * on its own would appear to do nothing.
+   */
+  const handleLocatePoiLayer = useCallback(
+    (layerId) => {
+      const feats = (poiData?.features || []).filter((f) => f.properties?.layer === layerId);
+      if (!feats.length) return;
+
+      const inView = bounds
+        ? feats.filter((f) => {
+            const [lon, lat] = f.geometry.coordinates;
+            return lon >= bounds[0] && lat >= bounds[1] && lon <= bounds[2] && lat <= bounds[3];
+          })
+        : feats;
+
+      setHighlightedPoiLayer(layerId);
+
+      // Already visible: just mark them and leave the view exactly where it is.
+      if (inView.length) return;
+
+      let west = 180;
+      let south = 90;
+      let east = -180;
+      let north = -90;
+      for (const f of feats) {
+        const [lon, lat] = f.geometry.coordinates;
+        west = Math.min(west, lon);
+        east = Math.max(east, lon);
+        south = Math.min(south, lat);
+        north = Math.max(north, lat);
+      }
+      setFitBounds({ bounds: [west, south, east, north], token: Date.now() });
+    },
+    [poiData, bounds],
+  );
 
   const handleTogglePoiLayer = useCallback(
     (id) => {
@@ -987,11 +1200,29 @@ export default function App() {
                   <input type="checkbox" checked={poiOn} onChange={() => setPoiOn((v) => !v)} />
                   <span>Show POI layers</span>
                 </label>
-                {structuresOn && zoom != null && zoom < 12 && (
+                {/*
+                  * Hill shading. On by default and exposed here because it is what makes
+                  * terrain readable — without the light and shadow, correct 3D geometry
+                  * still looks flat at anything but close range.
+                  */}
+                <label className="inline-toggle">
+                  <input
+                    type="checkbox"
+                    checked={hillshadeOn}
+                    disabled={!terrainMeta?.available}
+                    onChange={() => setHillshadeOn((v) => !v)}
+                  />
+                  <span>
+                    Hill shading{' '}
+                    <em className="inline-toggle-hint">— mountain light and shadow</em>
+                  </span>
+                </label>
+                {structuresOn && zoom != null && zoom < 9.5 && (
                   <p className="panel-note panel-note-dim">
-                    Zoom in to see bridges &amp; tunnels — TomTom drops these road
-                    attributes from tiles below zoom 12, so none can be drawn at this
-                    scale.
+                    Below zoom 9.5, bridges and tunnels show only along an active route.
+                    TomTom omits these attributes from wide-area tiles, so a whole-country
+                    view would need well over a thousand extra tile reads. Plan a route, or
+                    zoom in a little.
                   </p>
                 )}
                 {poiOn && (
@@ -1008,6 +1239,8 @@ export default function App() {
                     droppedOutOfCategory={poiData?.droppedOutOfCategory || 0}
                     onToggleEnabled={() => setPoiOn((v) => !v)}
                     onToggleLayer={handleTogglePoiLayer}
+                    onLocateLayer={handleLocatePoiLayer}
+                    highlighted={highlightedPoiLayer}
                     onSelectPreset={handlePoiPreset}
                   />
                 )}
@@ -1048,6 +1281,9 @@ export default function App() {
               routeData={routeData}
               selectedIndex={selectedIndex}
               structuresOn={structuresOn}
+              extractedStructures={extractedStructures}
+              routeStructureLines={routeStructureLines}
+              profileLabel={routeData?.profile?.label || null}
               onRouteStructures={setRouteStructures}
               start={start}
               end={end}
@@ -1083,6 +1319,8 @@ export default function App() {
               poiCategories={poiLayerDefs?.filter((l) => l.hasSource)}
               poiData={poiData}
               poiOn={poiOn && !navMode}
+              highlightedPoiLayer={highlightedPoiLayer}
+              fitBounds={fitBounds}
               navigating={navMode}
               navSplit={navSplit}
               followCamera={followCamera}

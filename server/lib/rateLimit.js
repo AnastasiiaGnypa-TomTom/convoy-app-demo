@@ -75,10 +75,23 @@ export function rateLimit({ name, capacity, perMinute }) {
   const refillPerMs = perMinute / 60_000;
 
   return function limiter(req, res, next) {
+    /*
+     * Internal loopback requests bypass the limit.
+     *
+     * /api/structures reads deeper basemap tiles through this app's own tile proxy, which
+     * means one user action can fire 60 loopback requests. Those were counted against the
+     * SAME per-IP bucket as the browser's own basemap tiles, so the two bursts together
+     * tripped the limit and the structures request failed with a gateway error. The
+     * upstream vendor call is still rate-limited on its own path; this only stops the
+     * server competing with itself.
+     */
+    const ip = clientIp(req);
+    if (ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1') return next();
+
     const now = Date.now();
     sweep(now);
 
-    const key = `${name}:${clientIp(req)}`;
+    const key = `${name}:${ip}`;
     let b = buckets.get(key);
     if (!b) {
       b = { tokens: capacity, last: now };

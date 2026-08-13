@@ -37,20 +37,102 @@ export const poisRouter = Router();
 
 /* -------------------------------------------------------------------- config */
 
-/** Per-layer result cap. */
-const LAYER_CAP = 50;
-/** Default convoy corridor width. */
-const DEFAULT_CORRIDOR_KM = 5;
 /**
- * searchAlongRoute takes maxDetourTime (seconds), not a corridor width — there is
- * no distance parameter. Converted at a nominal 45 km/h and doubled for the
- * there-and-back deviation. Approximate by nature, so it is documented rather than
- * presented as an exact corridor.
+ * Per-layer result cap.
+ *
+ * VIEWPORT is higher than ALONG_ROUTE and costs nothing extra: each nearbySearch already
+ * asks for limit=100, so the results were fetched and then thrown away. Discarding half
+ * of them made cities look sparse for no saving. The route corridor stays at 50 because
+ * there the cap is spread across many samples, and 50 well-distributed POIs read better
+ * on a long route than 100 crowding the map.
  */
-const corridorKmToDetourSeconds = (km) => Math.round((km / 45) * 3600 * 2);
+const LAYER_CAP_VIEWPORT = 100;
+const LAYER_CAP_ALONG_ROUTE = 50;
+const LAYER_CAP = LAYER_CAP_ALONG_ROUTE;
+/**
+ * Default convoy corridor: 5 miles either side of the route.
+ *
+ * Not "along the route" in the narrow sense — a convoy planner cares about what is
+ * reachable near the path (fuel, hospitals, rest areas), not only what is on the
+ * verge of it.
+ */
+const DEFAULT_CORRIDOR_KM = 8.05; // 5 miles
+
+/**
+ * searchAlongRoute takes maxDetourTime (seconds) and has no distance parameter, so a
+ * corridor WIDTH cannot be requested directly. Converted at a nominal 45 km/h and
+ * doubled for the there-and-back deviation.
+ *
+ * The multiplier is deliberately generous: detour time is a poor proxy for distance
+ * (a POI 8 km away on a motorway is a short detour; the same distance on lanes is a
+ * long one), so asking for a wider time budget than needed and then filtering by REAL
+ * distance to the route beats trusting the time alone. Without the filter, "within 5
+ * miles" would be a guess.
+ */
+/**
+ * Kept only for reporting. searchAlongRoute is NOT used for the corridor any more —
+ * measured, it returns 11-15 results no matter what `limit` asks for, and its
+ * maxDetourTime caps at 3600 s (a 16 km corridor 400s outright). It is an "on my way"
+ * service, not a corridor sweep, so it can never answer "everything within 5 miles".
+ */
+const corridorKmToDetourSeconds = (km) => Math.min(3600, Math.round((km / 45) * 3600 * 2));
+
+/** Sample points along the route, roughly `everyM` apart, capped at `max`. */
+function sampleRoute(points, { everyM, max }) {
+  const mPerLon = (lat) => Math.cos((lat * Math.PI) / 180) * 111320;
+  const cum = [0];
+  for (let i = 1; i < points.length; i++) {
+    const dx = (points[i].lon - points[i - 1].lon) * mPerLon(points[i].lat);
+    const dy = (points[i].lat - points[i - 1].lat) * 110540;
+    cum.push(cum[i - 1] + Math.hypot(dx, dy));
+  }
+  const total = cum[cum.length - 1];
+  if (!(total > 0)) return [points[0]];
+
+  const n = Math.min(max, Math.max(1, Math.ceil(total / everyM)));
+  const out = [];
+  for (let k = 0; k < n; k++) {
+    // Offset by half a step so samples sit in the middle of their stretch.
+    const d = total * ((k + 0.5) / n);
+    let i = 1;
+    while (i < cum.length - 1 && cum[i] < d) i++;
+    const t = (d - cum[i - 1]) / (cum[i] - cum[i - 1] || 1);
+    out.push({
+      lat: points[i - 1].lat + (points[i].lat - points[i - 1].lat) * t,
+      lon: points[i - 1].lon + (points[i].lon - points[i - 1].lon) * t,
+    });
+  }
+  return { samples: out, totalM: total, spacingM: total / n };
+}
+
+/** Metres from a point to a polyline, in a local planar approximation. */
+function metresToPolyline([lon, lat], points) {
+  const mPerLon = Math.cos((lat * Math.PI) / 180) * 111320;
+  let best = Infinity;
+  for (let i = 1; i < points.length; i++) {
+    const ax = (points[i - 1].lon - lon) * mPerLon;
+    const ay = (points[i - 1].lat - lat) * 110540;
+    const bx = (points[i].lon - lon) * mPerLon;
+    const by = (points[i].lat - lat) * 110540;
+    const vx = bx - ax;
+    const vy = by - ay;
+    const len2 = vx * vx + vy * vy;
+    const t = len2 > 0 ? Math.max(0, Math.min(1, -(ax * vx + ay * vy) / len2)) : 0;
+    const px = ax + vx * t;
+    const py = ay + vy * t;
+    const d2 = px * px + py * py;
+    if (d2 < best) best = d2;
+  }
+  return Math.sqrt(best);
+}
 
 const MAX_RADIUS_M = 50_000;
-const CONCURRENCY = 3;
+/*
+ * Raised from 3. With every layer switched on that was 13 queries in five sequential
+ * rounds, which is most of the delay after a pan; the retry-on-429 path already handles
+ * the rate limit if this proves too eager.
+ */
+const CONCURRENCY = 6;
 const RETRY_DELAYS_MS = [400, 1100, 2400];
 
 const poiCache = createCache({ ttlMs: 5 * 60_000 });
@@ -264,7 +346,7 @@ function summarise({ features, perLayer, violations, noSource, extra = {} }) {
     features,
     perLayer,
     capped: Object.entries(perLayer)
-      .filter(([, n]) => n >= LAYER_CAP)
+      .filter(([, n]) => n >= (extra?.mode === 'along-route' ? LAYER_CAP_ALONG_ROUTE : LAYER_CAP_VIEWPORT))
       .map(([id]) => id),
     droppedOutOfCategory: violations.length,
     noSourceRequested: noSource,
@@ -303,7 +385,18 @@ poisRouter.get('/', async (req, res, next) => {
   const mPerDegLon = 111_320 * Math.cos((lat * Math.PI) / 180);
   const halfW = ((maxLon - minLon) * mPerDegLon) / 2;
   const halfH = ((maxLat - minLat) * 111_320) / 2;
-  const radius = Math.min(MAX_RADIUS_M, Math.max(1000, Math.round(Math.hypot(halfW, halfH))));
+/*
+ * The LONGER half-axis, not the circumradius.
+ *
+ * hypot(halfW, halfH) is the circumradius, so the search circle covers about 1.8x the
+ * area of the box and TomTom spends its 100-result budget mostly on ground that is off
+ * screen — measured, only 19 of 71 loaded POIs were visible in a city view. Using the
+ * longer half-axis concentrates the same budget on roughly 1.3x the box instead, so
+ * more of what is fetched is actually in front of the user. The box the client sends is
+ * already padded 25% beyond the visible window, which is what covers the corners this
+ * gives up.
+ */
+  const radius = Math.min(MAX_RADIUS_M, Math.max(1000, Math.round(Math.max(halfW, halfH))));
 
   try {
     const settled = await pooled(
@@ -341,9 +434,17 @@ poisRouter.get('/', async (req, res, next) => {
       const layer = sourcedLayer(id);
       for (const r of settled[i].value.results) {
         if (!r.position) continue;
-        if (perLayer[id] >= LAYER_CAP) break;
-        const { lat: pLat, lon: pLon } = r.position;
-        if (pLon < minLon || pLon > maxLon || pLat < minLat || pLat > maxLat) continue;
+        if (perLayer[id] >= LAYER_CAP_VIEWPORT) break;
+        /*
+         * Deliberately NOT clamped to the bbox.
+         *
+         * `radius` is the bbox's circumradius, so the search circle extends past the
+         * rectangle's edges. Discarding everything outside the rectangle threw away
+         * roughly 40% of the 100-result budget TomTom had already returned and charged
+         * for, which is a large part of why cities looked sparse. Those extra POIs sit
+         * just off screen, which is exactly what the client's padding ring is for — they
+         * are on screen the moment you pan, with no new request.
+         */
         const code = assertInLayer(r, layer, id, violations);
         if (!code) continue;
         const dedupe = r.id || `${pLon.toFixed(5)},${pLat.toFixed(5)}`;
@@ -397,7 +498,6 @@ poisRouter.post('/along-route', async (req, res, next) => {
   }
 
   const km = Math.min(50, Math.max(0.5, Number(corridorKm) || DEFAULT_CORRIDOR_KM));
-  const maxDetourTime = corridorKmToDetourSeconds(km);
 
   /*
    * Thin the route to at most 120 supporting points: a full geometry is rejected as
@@ -414,35 +514,47 @@ poisRouter.post('/along-route', async (req, res, next) => {
   if (points.length < 2) {
     return res.status(400).json({ error: 'route contained no usable coordinates' });
   }
-  const body = JSON.stringify({ route: { points } });
+  /*
+   * A radius sweep along the route, not searchAlongRoute.
+   *
+   * The corridor is a DISTANCE band ("within 5 miles of the route"), and nearbySearch
+   * is the only TomTom search that takes a radius. So the route is sampled and a radius
+   * query is run at each sample; results are deduped and then filtered by true distance
+   * to the polyline, which is what makes the stated band exact rather than approximate.
+   *
+   * Sample spacing is 1.5x the radius so consecutive circles overlap and leave no gap
+   * in the band. MAX_SAMPLES bounds the vendor traffic on a long route; because the
+   * per-layer cap is LAYER_CAP anyway, more samples would mostly find POIs we then
+   * discard. Where sampling had to be coarser than ideal it is reported, not hidden.
+   */
+  const radius = Math.min(MAX_RADIUS_M, Math.round(km * 1000));
+  const MAX_SAMPLES = 18;
+  const sampled = sampleRoute(points, { everyM: radius * 1.5, max: MAX_SAMPLES });
+  const samples = sampled.samples || [points[0]];
+  const gapped = sampled.spacingM > radius * 1.6;
 
   try {
     const settled = await pooled(
-      queryable.map((id) => async () => {
-        const layer = sourcedLayer(id);
-        const url = tomtomUrl('/search/2/searchAlongRoute/.json', {
-          maxDetourTime,
-          categorySet: layer.categorySet.join(','),
-          limit: 100,
-        });
-        const json = await withRateLimitRetry(async () => {
-          const r = await tomtomFetch(url, {
-            timeoutMs: 15_000,
-            method: 'POST',
-            headers: { 'content-type': 'application/json' },
-            body,
-          });
-          if (!r.ok) {
-            const text = (await r.text()).replace(/\s+/g, ' ').slice(0, 160);
-            throw new VendorError(`searchAlongRoute HTTP ${r.status}: ${text}`, {
-              status: 502,
-              vendorStatus: r.status,
-            });
-          }
-          return r.json();
-        });
-        return { id, results: json.results || [] };
-      }),
+      // One query per (layer, sample). Flattened so the pool bounds all of them.
+      queryable.flatMap((id) =>
+        samples.map((pt, sampleIndex) => async () => {
+          const layer = sourcedLayer(id);
+          const json = await withRateLimitRetry(() =>
+            tomtomJson(
+              tomtomUrl('/search/2/nearbySearch/.json', {
+                lat: pt.lat,
+                lon: pt.lon,
+                radius,
+                categorySet: layer.categorySet.join(','),
+                limit: 100,
+              }),
+              { timeoutMs: 12_000 },
+            ),
+          );
+          return { id, sampleIndex, results: json.results || [] };
+        }),
+      ),
+      CONCURRENCY,
     );
 
     const features = [];
@@ -451,23 +563,58 @@ poisRouter.post('/along-route', async (req, res, next) => {
     const seen = new Set();
     for (const id of queryable) perLayer[id] = 0;
 
-    for (let i = 0; i < settled.length; i++) {
-      const id = queryable[i];
-      if (settled[i].status !== 'fulfilled') {
-        console.warn(`[pois] along-route ${id} failed:`, settled[i].reason?.message);
+    /*
+     * Interleave the samples; do not drain them in order.
+     *
+     * This is what stopped the POIs bunching at one end of the route. Each sample
+     * returns up to 100 results, so processing them sequentially let the FIRST sample
+     * fill the entire per-layer cap and then `break` — on Amsterdam to Utrecht all 50
+     * fuel stations came from the Amsterdam end and the rest of the route looked empty.
+     *
+     * Taking one result from each sample in turn spends the cap evenly along the route,
+     * which is what a corridor is supposed to mean. Within a sample TomTom already
+     * orders by distance, so the nearest to each stretch win.
+     */
+    const bySample = new Map(); // layerId -> results indexed by sampleIndex
+    for (const outcome of settled) {
+      if (outcome.status !== 'fulfilled') {
+        console.warn('[pois] along-route sample failed:', outcome.reason?.message);
         continue;
       }
+      const { id, sampleIndex, results } = outcome.value;
+      if (!bySample.has(id)) bySample.set(id, []);
+      bySample.get(id)[sampleIndex] = results;
+    }
+
+    for (const [id, perSample] of bySample) {
       const layer = sourcedLayer(id);
-      for (const r of settled[i].value.results) {
-        if (!r.position) continue;
-        if (perLayer[id] >= LAYER_CAP) break;
-        const code = assertInLayer(r, layer, id, violations);
-        if (!code) continue;
-        const dedupe = r.id || `${r.position.lon.toFixed(5)},${r.position.lat.toFixed(5)}`;
-        if (seen.has(dedupe)) continue;
-        seen.add(dedupe);
-        features.push(toFeature(r, id, code));
-        perLayer[id]++;
+      const cursors = perSample.map(() => 0);
+      let progressed = true;
+
+      while (perLayer[id] < LAYER_CAP && progressed) {
+        progressed = false;
+        for (let si = 0; si < perSample.length && perLayer[id] < LAYER_CAP; si++) {
+          const list = perSample[si];
+          if (!list) continue;
+
+          // Advance this sample's cursor to its next usable result, then move on.
+          while (cursors[si] < list.length) {
+            const r = list[cursors[si]++];
+            if (!r?.position) continue;
+            // The corridor is enforced by REAL distance to the route, which is what
+            // makes the stated band exact rather than a by-product of the circles.
+            if (metresToPolyline([r.position.lon, r.position.lat], points) > km * 1000) continue;
+            const code = assertInLayer(r, layer, id, violations);
+            if (!code) continue;
+            const dedupe = r.id || `${r.position.lon.toFixed(5)},${r.position.lat.toFixed(5)}`;
+            if (seen.has(dedupe)) continue;
+            seen.add(dedupe);
+            features.push(toFeature(r, id, code));
+            perLayer[id]++;
+            progressed = true;
+            break;
+          }
+        }
       }
     }
 
@@ -477,7 +624,14 @@ poisRouter.post('/along-route', async (req, res, next) => {
         perLayer,
         violations,
         noSource,
-        extra: { mode: 'along-route', corridorKm: km, maxDetourTime },
+        extra: {
+          mode: 'along-route',
+          corridorKm: km,
+          corridorMiles: Math.round((km / 1.609) * 10) / 10,
+          samples: samples.length,
+          // True when the route was long enough that circles could not fully overlap.
+          sampledWithGaps: gapped,
+        },
       }),
     );
   } catch (err) {

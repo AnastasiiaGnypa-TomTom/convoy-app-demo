@@ -11,6 +11,8 @@ export default function PoiPanel({
   layers,
   selected,
   counts,
+  onLocateLayer,
+  highlighted,
   capped,
   enabled,
   loading,
@@ -39,10 +41,25 @@ export default function PoiPanel({
           </span>
           <span className="poi-name">{l.label}</span>
           {on && n != null && (
-            <span className="poi-count">
+            <button
+              type="button"
+              className={`poi-count poi-count-btn ${highlighted === l.id ? 'poi-count-active' : ''}`}
+              onClick={(e) => {
+                // Inside a <label>, so stop the click toggling the checkbox.
+                e.preventDefault();
+                e.stopPropagation();
+                onLocateLayer?.(l.id);
+              }}
+              disabled={!n}
+              title={
+                n
+                  ? `Show these ${n} on the map`
+                  : 'Nothing in view'
+              }
+            >
               {n}
               {capped?.includes(l.id) ? '+' : ''}
-            </span>
+            </button>
           )}
         </label>
 
@@ -95,7 +112,9 @@ export default function PoiPanel({
               : selected.length === 0
                 ? 'Select one or more layers.'
                 : `${total} POI${total === 1 ? '' : 's'} ${
-                    mode === 'along-route' ? `within ${corridorKm} km of the route` : 'in view'
+                    mode === 'along-route'
+                      ? `within ${Number(corridorKm).toFixed(1)} km (${(Number(corridorKm) / 1.609).toFixed(0)} mi) of the route`
+                      : 'in view'
                   }`}
             {!loading && capped?.length > 0 && (
               <span className="poi-trunc"> · capped at 50 per layer</span>

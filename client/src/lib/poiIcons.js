@@ -26,7 +26,15 @@ export const glyphFor = (layer) => (typeof layer === 'string' ? '•' : layer?.g
  * Rendered at 2× and declared with pixelRatio 2 so it stays crisp on retina and
  * when MapLibre scales it up at high zoom.
  */
-function renderIcon({ color, glyph, size = 48 }) {
+/*
+ * Rendered at 96px and registered at pixelRatio 2, so the LOGICAL size is 48 CSS px.
+ *
+ * It was 48px at pixelRatio 2, i.e. a 24 px logical badge — so even icon-size 1.5 only
+ * produced a 31 px marker, which is why they still read as small dots when zoomed in.
+ * Doubling the bitmap raises the base and keeps it crisp on retina; the zoom ramp in
+ * poiLayers.js is expressed against this 48 px base.
+ */
+function renderIcon({ color, glyph, size = 96 }) {
   const canvas = document.createElement('canvas');
   canvas.width = size;
   canvas.height = size;
