@@ -879,3 +879,31 @@ export function setRouteStructureLinesVisible(map, visible) {
     if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', visible ? 'visible' : 'none');
   }
 }
+
+/**
+ * tweak: lift the on-route bridge/tunnel lines above the route line.
+ *
+ * They were added early in the stack (index ~48 against the route's ~142), so the blue
+ * route was painted straight over them — the structures you most need to see were the
+ * ones hidden. Order within the group keeps the halo and casing beneath their lines, and
+ * the point markers on top of those.
+ *
+ * Call this BEFORE raisePoiLayers so the POI icons still end up above everything.
+ */
+export function raiseRouteStructureLayers(map) {
+  for (const id of [
+    ROUTE_STRUCT_LAYERS.glow,
+    ROUTE_STRUCT_LAYERS.casing,
+    ROUTE_STRUCT_LAYERS.bridge,
+    ROUTE_STRUCT_LAYERS.tunnel,
+    STRUCTURE_LAYERS.routeStructures,
+  ]) {
+    if (map.getLayer(id)) {
+      try {
+        map.moveLayer(id); // no beforeId → to the top
+      } catch {
+        /* layer can vanish mid style-swap; harmless */
+      }
+    }
+  }
+}

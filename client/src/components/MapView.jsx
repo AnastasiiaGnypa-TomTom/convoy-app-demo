@@ -53,6 +53,7 @@ import { buildRouteIndex } from '../lib/navigation.js';
 import {
   bindStructureClicks,
   ensureExtractedLayers,
+  raiseRouteStructureLayers,
   ensureRouteStructureLayers,
   setRouteStructureLines,
   setRouteStructureLinesVisible,
@@ -596,6 +597,9 @@ export default function MapView({
     if (!map || !ready) return;
     const lift = () => {
       try {
+        // Structures first, then POIs — so the final order is
+        // route < structures < POI icons.
+        raiseRouteStructureLayers(map);
         raisePoiLayers(map);
       } catch (err) {
         console.warn('[poi order]', err.message);
