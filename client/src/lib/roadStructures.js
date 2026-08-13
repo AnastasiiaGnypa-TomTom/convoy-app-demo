@@ -81,6 +81,36 @@ const significanceOpacity = (full) => [
   full,
 ];
 
+/*
+ * On-route vs off-route weighting, in one place.
+ *
+ * ROUTE_LINE_RAMP is the SAME expression routeLayers.js uses for the blue route line
+ * (base*0.6 at z8, base at z12, base*1.5 at z16). Both the on-route and off-route
+ * structure layers are built from it, which is what makes the 40% ratio hold at every
+ * zoom rather than only at the one it was eyeballed at — a fixed pixel offset, or a
+ * different ramp shape, would drift apart as you zoom.
+ */
+const ROUTE_LINE_WIDTH = 6.5; // must match `width(6.5)` on LAYERS.selected
+const OFF_ROUTE_WIDTH_FACTOR = 0.4;
+const OFF_ROUTE_OPACITY = 0.2;
+const ON_ROUTE_OPACITY = 1.0;
+
+const ROUTE_LINE_RAMP = (base) => [
+  'interpolate',
+  ['linear'],
+  ['zoom'],
+  8,
+  base * 0.6,
+  12,
+  base,
+  16,
+  base * 1.5,
+];
+
+/** Width of an off-route structure: exactly 40% of the route line, at every zoom. */
+const offRouteWidth = (factor = 1) =>
+  ROUTE_LINE_RAMP(ROUTE_LINE_WIDTH * OFF_ROUTE_WIDTH_FACTOR * factor);
+
 const BASEMAP_SOURCE = 'vectorTiles';
 
 export const STRUCTURE_LAYERS = {
@@ -152,17 +182,17 @@ export function ensureStructureLayers(map) {
    * similar weight; the glow gives it a halo so it separates from the basemap without
    * having to make the line itself fat enough to obscure the road it sits on.
    */
-  const glow = (base, color) => ({
+  const glow = (color) => ({
     'line-color': color,
     /*
-     * Kept deliberately tight. A 2.6x halo was tried and reverted: in a canal city like
-     * Utrecht there are several hundred short bridges in one z12 view, and a wide blurred
-     * halo around each merges them into pink fuzz rather than reading as crossings. The
-     * line itself carries the visibility; the halo only has to separate it from the road
-     * casing underneath.
+     * The off-route halo, scaled from the same ramp as its line and faded to match.
+     *
+     * A bright halo behind a 0.2-opacity line would put the brightness straight back;
+     * kept tight for the reason found earlier too — in a canal city several hundred
+     * short bridges with wide blurred halos merge into a coloured fuzz.
      */
-    'line-width': width(base * 1.9),
-    'line-opacity': ['interpolate', ['linear'], ['zoom'], 12, ['case', IS_MAJOR, 0.3, 0], 13.5, 0.3, 15, 0.16],
+    'line-width': offRouteWidth(2.4),
+    'line-opacity': ['interpolate', ['linear'], ['zoom'], 12, ['case', IS_MAJOR, 0.12, 0], 13.5, 0.12, 15, 0.08],
     'line-blur': ['interpolate', ['linear'], ['zoom'], 12, 3, 16, 2],
   });
 
@@ -175,7 +205,7 @@ export function ensureStructureLayers(map) {
       minzoom: STRUCTURE_MINZOOM,
       filter: ['==', ['get', 'bridge'], true],
       layout: { visibility: 'none', 'line-cap': 'round', 'line-join': 'round' },
-      paint: glow(4.5, BRIDGE_COLOR),
+      paint: glow(BRIDGE_COLOR),
     },
     beforeId,
   );
@@ -189,7 +219,7 @@ export function ensureStructureLayers(map) {
       minzoom: STRUCTURE_MINZOOM,
       filter: ['==', ['get', 'tunnel'], true],
       layout: { visibility: 'none', 'line-cap': 'round', 'line-join': 'round' },
-      paint: glow(4, TUNNEL_COLOR),
+      paint: glow(TUNNEL_COLOR),
     },
     beforeId,
   );
@@ -203,8 +233,12 @@ export function ensureStructureLayers(map) {
       minzoom: STRUCTURE_MINZOOM,
       filter: ['==', ['get', 'bridge'], true],
       layout: { visibility: 'none', 'line-cap': 'butt', 'line-join': 'round' },
-      // tweak: off-route casing scaled down with its line.
-      paint: { 'line-color': '#0b1016', 'line-width': width(4.5), 'line-opacity': significanceOpacity(0.4) },
+      // Off-route casing, scaled from the same ramp as its line.
+      paint: {
+        'line-color': '#0b1016',
+        'line-width': offRouteWidth(1.9),
+        'line-opacity': significanceOpacity(OFF_ROUTE_OPACITY),
+      },
     },
     beforeId,
   );
@@ -218,10 +252,13 @@ export function ensureStructureLayers(map) {
       minzoom: STRUCTURE_MINZOOM,
       filter: ['==', ['get', 'bridge'], true],
       layout: { visibility: 'none', 'line-cap': 'butt', 'line-join': 'round' },
-      // tweak: OFF-ROUTE styling — deliberately thin and faded so it is obvious these
-      // are nearby structures, not ones the convoy crosses. On-route lines are full
-      // route width at 0.95 opacity; these are roughly a third of that.
-      paint: { 'line-color': BRIDGE_COLOR, 'line-width': width(2.2), 'line-opacity': significanceOpacity(0.45) },
+      // OFF-ROUTE: 40% of the route line's width at 0.2 opacity, so nearby structures
+      // stay legible as context without competing with the ones on the route.
+      paint: {
+        'line-color': BRIDGE_COLOR,
+        'line-width': offRouteWidth(),
+        'line-opacity': significanceOpacity(OFF_ROUTE_OPACITY),
+      },
     },
     beforeId,
   );
@@ -237,9 +274,9 @@ export function ensureStructureLayers(map) {
       layout: { visibility: 'none', 'line-cap': 'butt', 'line-join': 'round' },
       paint: {
         'line-color': TUNNEL_COLOR,
-        // tweak: OFF-ROUTE styling — see the bridge layer above.
-        'line-width': width(2),
-        'line-opacity': significanceOpacity(0.45),
+        // OFF-ROUTE — see the bridge layer above.
+        'line-width': offRouteWidth(),
+        'line-opacity': significanceOpacity(OFF_ROUTE_OPACITY),
         // Dashed: a tunnel is road you cannot see.
         'line-dasharray': [1.6, 1.1],
       },
@@ -726,7 +763,11 @@ export function ensureExtractedLayers(map) {
   }
 
   // At regional zoom lines must be a touch heavier to read at all.
-  const w = (base) => ['interpolate', ['linear'], ['zoom'], 10, base * 1.5, 12, base * 1.6];
+  /*
+   * Regional-zoom structures are off-route context too, so they use the same 40%-of-route
+   * width and 0.2 opacity as the native off-route layers. `base` is a multiplier on that.
+   */
+  const w = (base) => offRouteWidth(base);
   const max = STRUCTURE_MINZOOM;
 
   const add = (id, paint, extra = {}) =>
@@ -747,29 +788,29 @@ export function ensureExtractedLayers(map) {
     EXTRACTED_LAYERS.glow,
     {
       'line-color': ['match', ['get', 'kind'], 'tunnel', TUNNEL_COLOR, BRIDGE_COLOR],
-      'line-width': w(8),
-      'line-opacity': 0.32,
+      'line-width': w(2.4),
+      'line-opacity': 0.12,
       'line-blur': 3,
     },
     { filter: IS_MAJOR },
   );
   add(
     EXTRACTED_LAYERS.casing,
-    { 'line-color': '#0b1016', 'line-width': w(5.5), 'line-opacity': 0.65 },
+    { 'line-color': '#0b1016', 'line-width': w(1.9), 'line-opacity': OFF_ROUTE_OPACITY },
     { filter: IS_MAJOR },
   );
   // Regional zoom shows only what reads at that scale — see ALL_STRUCTURES_ZOOM.
   add(
     EXTRACTED_LAYERS.bridge,
-    { 'line-color': BRIDGE_COLOR, 'line-width': w(3), 'line-opacity': 1 },
+    { 'line-color': BRIDGE_COLOR, 'line-width': w(1), 'line-opacity': OFF_ROUTE_OPACITY },
     { filter: ['all', ['==', ['get', 'kind'], 'bridge'], IS_MAJOR] },
   );
   add(
     EXTRACTED_LAYERS.tunnel,
     {
       'line-color': TUNNEL_COLOR,
-      'line-width': w(2.8),
-      'line-opacity': 0.98,
+      'line-width': w(1),
+      'line-opacity': OFF_ROUTE_OPACITY,
       'line-dasharray': [1.6, 1.1],
     },
     { filter: ['all', ['==', ['get', 'kind'], 'tunnel'], IS_MAJOR] },
@@ -862,9 +903,10 @@ export function ensureRouteStructureLayers(map) {
     ROUTE_STRUCT_LAYERS.bridge,
     {
       'line-color': BRIDGE_COLOR,
-      // tweak: matches the blue route line's width exactly (see ROUTE_WIDTH).
+      // Matches the blue route line's width exactly, at full opacity. No significance
+      // fade here: a short bridge still matters when the convoy has to cross it.
       'line-width': w(ROUTE_WIDTH),
-      'line-opacity': significanceOpacity(0.95),
+      'line-opacity': ON_ROUTE_OPACITY,
     },
     ['==', ['get', 'kind'], 'bridge'],
   );
@@ -872,9 +914,9 @@ export function ensureRouteStructureLayers(map) {
     ROUTE_STRUCT_LAYERS.tunnel,
     {
       'line-color': TUNNEL_COLOR,
-      // tweak: matches the blue route line's width exactly (see ROUTE_WIDTH).
+      // Matches the blue route line's width exactly, at full opacity.
       'line-width': w(ROUTE_WIDTH),
-      'line-opacity': significanceOpacity(0.95),
+      'line-opacity': ON_ROUTE_OPACITY,
       'line-dasharray': [1.6, 1.1],
     },
     ['==', ['get', 'kind'], 'tunnel'],
