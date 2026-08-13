@@ -82,7 +82,9 @@ export function ensureRouteLayers(map) {
     source: ROUTE_SOURCE,
     filter: ['==', ['get', 'index'], -1],
     layout: { 'line-cap': 'round', 'line-join': 'round' },
-    paint: { 'line-color': CASING_COLOR, 'line-width': width(11), 'line-opacity': 0.8 },
+    // tweak: darker, wider casing (was width(11) at 0.8) so the route separates from
+    // satellite imagery and shaded relief in the Alps, where mid-tone terrain swallowed it.
+    paint: { 'line-color': CASING_COLOR, 'line-width': width(14), 'line-opacity': 0.95 },
   });
 
   map.addLayer({
@@ -91,7 +93,12 @@ export function ensureRouteLayers(map) {
     source: ROUTE_SOURCE,
     filter: ['==', ['get', 'index'], -1],
     layout: { 'line-cap': 'round', 'line-join': 'round' },
-    paint: { 'line-color': SELECTED_COLOR, 'line-width': width(5.5) },
+    // tweak: 5.5 -> 6.5, and a subtle bright halo for contrast over dark terrain.
+    paint: {
+      'line-color': SELECTED_COLOR,
+      'line-width': width(6.5),
+      'line-blur': 0.2,
+    },
   });
 
   /*

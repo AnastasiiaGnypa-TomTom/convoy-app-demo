@@ -704,6 +704,32 @@ export default function MapView({
     return () => map.off('zoom', applyTerrain);
   }, [ready, terrainAvailable, terrainSourceDef, is3D, exaggeration]);
 
+  /*
+   * tweak: re-assert the route after a terrain or exaggeration change.
+   *
+   * Changing exaggeration re-builds the terrain mesh, and the route line could end up
+   * drawn under the new drape — it looked like the route had vanished. Re-setting the
+   * source data and the selection forces MapLibre to re-place the line on the new mesh.
+   * Cheap (no refetch) and idempotent, so it is safe to run on every change.
+   */
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !ready) return;
+    const id = setTimeout(() => {
+      try {
+        const fc = routeData?.routes;
+        if (fc) {
+          setRouteData(map, fc);
+          setSelectedRoute(map, selectedIndex ?? 0);
+        }
+        if (routeStructureLines) setRouteStructureLines(map, routeStructureLines);
+      } catch (err) {
+        console.warn('[route re-drape]', err.message);
+      }
+    }, 120);
+    return () => clearTimeout(id);
+  }, [exaggeration, is3D, terrainAvailable, ready, routeData, selectedIndex, routeStructureLines]);
+
   // Pitch is the camera's business; the controller owns it.
   useEffect(() => {
     const camera = cameraRef.current;
