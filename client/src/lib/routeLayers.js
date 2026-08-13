@@ -120,8 +120,10 @@ export function ensureRouteLayers(map) {
         '#b91c1c',
         '#f97316',
       ],
-      'line-width': width(6.5),
-      'line-opacity': 0.95,
+      // tweak: congestion drawn thinner than the route (was width(6.5), opacity 0.95)
+      // so traffic reads as a subtle accent on the line rather than covering it.
+      'line-width': width(2.5),
+      'line-opacity': 0.8,
     },
   });
 }
