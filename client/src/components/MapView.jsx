@@ -446,10 +446,19 @@ export default function MapView({
     const map = mapRef.current;
     if (!map || !ready) return;
 
+    /*
+     * tweak: once a start and destination are set, bridges and tunnels are shown only
+     * along the route. Off-route structures are noise for a convoy planner — the whole
+     * point is which ones the vehicle actually has to cross — and in a city they buried
+     * the route's own under hundreds of unrelated ones. With no route, the viewport
+     * behaviour is unchanged.
+     */
+    const hasRoute = Boolean(routeData?.routes?.features?.length);
+
     const apply = () => {
       try {
         ensureStructureLayers(map);
-        setStructuresVisible(map, Boolean(structuresOn));
+        setStructuresVisible(map, Boolean(structuresOn) && !hasRoute);
       } catch (err) {
         // A failure here means the layer silently does not exist; do not whisper it.
         console.error('[structures] layer setup failed:', err.message);
@@ -477,7 +486,7 @@ export default function MapView({
       map.off('styledata', apply);
       unbind();
     };
-  }, [ready, structuresOn]);
+  }, [ready, structuresOn, routeData]);
 
   /*
    * Structures ON the route. Recomputed when the route changes and after the map
@@ -560,7 +569,12 @@ export default function MapView({
       try {
         ensureExtractedLayers(map);
         setExtractedStructures(map, extractedStructures);
-        setExtractedVisible(map, Boolean(structuresOn && extractedStructures?.features?.length));
+        // tweak: hidden while a route is active — the route corridor layer covers it.
+        const hasRoute = Boolean(routeData?.routes?.features?.length);
+        setExtractedVisible(
+          map,
+          Boolean(structuresOn && extractedStructures?.features?.length) && !hasRoute,
+        );
       } catch (err) {
         console.warn('[structures/x]', err.message);
       }
@@ -569,7 +583,7 @@ export default function MapView({
     // Rebuilt after a basemap swap, same as the native layers.
     map.on('styledata', apply);
     return () => map.off('styledata', apply);
-  }, [ready, extractedStructures, structuresOn]);
+  }, [ready, extractedStructures, structuresOn, routeData]);
 
   /* ------------------------------------- "show me these" fit + highlight */
   useEffect(() => {
