@@ -286,3 +286,27 @@ export function setPoiHighlight(map, layerId) {
   if (!map.getLayer(POI_HIGHLIGHT_LAYER)) return;
   map.setFilter(POI_HIGHLIGHT_LAYER, ['==', ['get', 'layer'], layerId || '__none__']);
 }
+
+/**
+ * tweak: lift the POI layers to the top of the stack.
+ *
+ * MapLibre draws in layer order, and the route, the steep-gradient band and the
+ * bridge/tunnel lines are all added or re-added after the POI layers — so a fuel station
+ * sitting on the motorway was drawn UNDER the route and the orange band, which is
+ * exactly backwards: the icons are what you click, and a marker you cannot see is a
+ * marker you cannot use.
+ *
+ * Ordered so the ring sits behind its icons and the labels stay above everything.
+ * Idempotent, so it is safe to call after any layer change or style reload.
+ */
+export function raisePoiLayers(map) {
+  for (const id of [POI_HIGHLIGHT_LAYER, POI_LAYERS.dot, POI_LAYERS.icon, POI_LAYERS.label]) {
+    if (map.getLayer(id)) {
+      try {
+        map.moveLayer(id); // no beforeId → move to the very top
+      } catch {
+        /* a missing layer during a style swap is not worth failing over */
+      }
+    }
+  }
+}

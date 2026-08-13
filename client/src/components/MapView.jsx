@@ -23,6 +23,7 @@ import {
   bindPoiClicks,
   ensurePoiHighlightLayer,
   ensurePoiLayers,
+  raisePoiLayers,
   setPoiData,
   setPoiHighlight,
   setPoiVisible,
@@ -584,6 +585,26 @@ export default function MapView({
     map.on('styledata', apply);
     return () => map.off('styledata', apply);
   }, [ready, extractedStructures, structuresOn, routeData]);
+
+  /*
+   * tweak: keep the POI icons above the route, the steep band and the structure lines.
+   * Those layers are re-added on style swaps and route changes, each time landing on top
+   * of the POI layers, so the lift has to be re-applied rather than done once.
+   */
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !ready) return;
+    const lift = () => {
+      try {
+        raisePoiLayers(map);
+      } catch (err) {
+        console.warn('[poi order]', err.message);
+      }
+    };
+    lift();
+    map.on('styledata', lift);
+    return () => map.off('styledata', lift);
+  }, [ready, poiData, poiCategories, routeData, extractedStructures, routeStructureLines, steepGeoJSON, exaggeration]);
 
   /* ------------------------------------- "show me these" fit + highlight */
   useEffect(() => {
