@@ -276,8 +276,20 @@ ok "HTTPS only (HTTP redirects)"
 say "Deploy"
 echo "  Shipping a prebuilt package; no server-side build. Usually under a minute."
 
+#
+# --clean wipes wwwroot before extracting.
+#
+# Without it, `az webapp deploy` extracts OVER the existing files and never removes
+# ones the new package dropped. Every historical client bundle therefore stayed on the
+# server: after a deploy the site served the current index-<hash>.js AND two stale ones,
+# all returning 200. Any browser holding a cached index.html kept loading the OLD bundle
+# indefinitely, so the deploy looked like it had silently not applied — the exact symptom
+# reported. A stale index.html now 404s on its asset and the browser fetches a fresh one.
+#
+# Safe because the package is complete and self-contained: the client is prebuilt and
+# node_modules is installed on the host from the shipped lockfile.
 retry az webapp deploy -g "$RESOURCE_GROUP" -n "$APP_NAME" \
-  --src-path "$PKG" --type zip --output none
+  --src-path "$PKG" --type zip --clean true --output none
 ok "package deployed"
 
 rm -rf "$PKG" "$STAGE"
