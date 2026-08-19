@@ -8,6 +8,7 @@ import Sidebar from './components/Sidebar.jsx';
 import ViewToggles from './components/ViewToggles.jsx';
 import NavigateView from './components/NavigateView.jsx';
 import ElevationProfile from './components/ElevationProfile.jsx';
+import PrintView from './components/PrintView.jsx'; // task 10a
 import TimeControl from './components/TimeControl.jsx';
 import RoutePanel from './components/RoutePanel.jsx';
 import {
@@ -102,6 +103,19 @@ export default function App() {
   const [selectedIndex, setSelectedIndex] = useState(0);
   // task 7: road types to avoid. Empty by default, so routing is unchanged until asked.
   const [avoid, setAvoid] = useState([]);
+  /*
+   * task 8: departure-time routing. 'now' keeps the previous live-traffic behaviour, so
+   * the default is unchanged until the user picks a time.
+   */
+  const [timeMode, setTimeMode] = useState('now'); // 'now' | 'depart' | 'arrive'
+  const [timeValue, setTimeValue] = useState('');
+  /*
+   * task 10a: printable output. `printSnapshot` holds a PNG of the live canvas, captured
+   * on entry — an interactive WebGL map cannot print, and MapLibre's canvas is blank when
+   * read unless the frame is grabbed deliberately.
+   */
+  const [printing, setPrinting] = useState(false);
+  const [printSnapshot, setPrintSnapshot] = useState(null);
   const [routeLoading, setRouteLoading] = useState(false);
   const [mapCenter, setMapCenter] = useState(null);
   const [panelOpen, setPanelOpen] = useState(true);
@@ -397,6 +411,9 @@ export default function App() {
         profileId,
         custom: profileId === 'custom' ? custom : undefined,
         avoid, // task 7
+        // task 8: mutually exclusive at the API, so only ever one of the two is sent.
+        departAt: timeMode === 'depart' && timeValue ? new Date(timeValue).toISOString() : undefined,
+        arriveAt: timeMode === 'arrive' && timeValue ? new Date(timeValue).toISOString() : undefined,
       },
       { signal: ctl.signal },
     )
@@ -415,7 +432,7 @@ export default function App() {
       });
 
     return () => ctl.abort();
-  }, [start, end, profileId, custom, avoid]); // task 7: avoid re-routes
+  }, [start, end, profileId, custom, avoid, timeMode, timeValue]); // task 7/8
 
   /* --------------------------------------------------- traffic incidents */
   /*
@@ -898,6 +915,39 @@ export default function App() {
   }, []);
 
   useEffect(() => () => clearTimeout(corridorTimerRef.current), []);
+
+  /*
+   * task 10a: enter the print view, grabbing the map first.
+   *
+   * preserveDrawingBuffer is off (it costs performance every frame), so the canvas reads
+   * blank unless captured immediately after a render. triggerRepaint + one frame gives a
+   * valid buffer; if it still comes back empty the view simply omits the map rather than
+   * printing a black rectangle.
+   */
+  const openPrintView = useCallback(() => {
+    const map = mapRef2.current;
+    if (!map) {
+      setPrintSnapshot(null);
+      setPrinting(true);
+      return;
+    }
+    try {
+      map.triggerRepaint();
+      map.once('render', () => {
+        try {
+          const url = map.getCanvas().toDataURL('image/png');
+          // A blank canvas produces a very short data URL; treat that as no snapshot.
+          setPrintSnapshot(url && url.length > 5000 ? url : null);
+        } catch {
+          setPrintSnapshot(null);
+        }
+        setPrinting(true);
+      });
+    } catch {
+      setPrintSnapshot(null);
+      setPrinting(true);
+    }
+  }, []);
 
   const handleSelectStructure = useCallback((structure, key) => {
     if (!structure?.coord) return;
@@ -1409,14 +1459,26 @@ export default function App() {
             routes={routeData?.routes}
             /* task 7 */
             avoidOptions={routeData?.avoidOptions || null}
+            /* task 8 */
+            timeMode={timeMode}
+            timeValue={timeValue}
+            onTimeModeChange={setTimeMode}
+            onTimeValueChange={setTimeValue}
+            timing={routeData?.timing || null}
             avoid={avoid}
             onAvoidChange={setAvoid}
             composition={
               routeData?.routes?.features?.find((f) => f.properties.index === (selectedIndex ?? 0))
                 ?.properties?.composition || null
             }
+            /* task 9 */
+            roundabouts={
+              routeData?.routes?.features?.find((f) => f.properties.index === (selectedIndex ?? 0))
+                ?.properties?.roundabouts || null
+            }
             routeStructures={routeStructureList}
             onSelectStructure={handleSelectStructure}
+            onPrint={openPrintView} /* task 10a */
             highlightedStructureKey={highlightedStructure?.key || null}
             selectedIndex={selectedIndex}
             routeLoading={routeLoading}
@@ -1732,6 +1794,35 @@ export default function App() {
         )}
         </div>
       </main>
+
+      {/* task 10a: printable output, rendered over everything so the paper page is clean. */}
+      {printing && (
+        <PrintView
+          route={routeData?.routes?.features?.find((f) => f.properties.index === (selectedIndex ?? 0))}
+          profileLabel={routeData?.profile?.label}
+          profileSpec={routeData?.profile?.spec}
+          origin={start?.label || start?.address || null}
+          destination={end?.label || end?.address || null}
+          elevProfile={elevProfile}
+          gradeLimit={activeGradeLimit}
+          structures={routeStructureList}
+          roundabouts={
+            routeData?.routes?.features?.find((f) => f.properties.index === (selectedIndex ?? 0))
+              ?.properties?.roundabouts || null
+          }
+          composition={
+            routeData?.routes?.features?.find((f) => f.properties.index === (selectedIndex ?? 0))
+              ?.properties?.composition || null
+          }
+          pois={poiData}
+          poiLayers={poiLayerDefs}
+          timing={routeData?.timing}
+          avoidApplied={routeData?.avoidApplied}
+          mapSnapshot={printSnapshot}
+          onClose={() => setPrinting(false)}
+          onPrint={() => window.print()}
+        />
+      )}
 
       {error && !navMode && (
         <div className="error-toast" role="alert">

@@ -2604,3 +2604,83 @@ h2 {
 .comp-bar > span { display: block; height: 100%; background: var(--accent); }
 .comp-val { font-size: 0.7rem; font-variant-numeric: tabular-nums; color: var(--text); white-space: nowrap; }
 .comp-note { margin: 0.35rem 0 0; font-size: 0.66rem; color: var(--text-dim); opacity: 0.85; }
+
+/* ───────────── task 8: departure time ───────────── */
+.depart-block { margin-top: 0.6rem; font-size: 0.78rem; }
+.depart-block > summary {
+  cursor: pointer; color: var(--text-dim); font-size: 0.72rem;
+  text-transform: uppercase; letter-spacing: 0.07em;
+}
+.depart-modes { display: flex; gap: 0.3rem; margin: 0.4rem 0; }
+.depart-mode {
+  flex: 1; padding: 0.28rem 0.2rem; font: inherit; font-size: 0.72rem;
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: 5px;
+  color: var(--text-dim); cursor: pointer;
+}
+.depart-mode-on { background: var(--accent); border-color: var(--accent); color: #0b1016; font-weight: 600; }
+.depart-input {
+  width: 100%; background: var(--surface-2); border: 1px solid var(--border);
+  border-radius: 5px; color: var(--text); padding: 0.32rem 0.4rem; font: inherit; font-size: 0.78rem;
+}
+.depart-note { margin: 0.35rem 0 0; font-size: 0.66rem; color: var(--text-dim); opacity: 0.9; }
+/* Future work reads as a limit, not a feature. */
+.depart-note-future { color: var(--warn); opacity: 1; }
+
+/* ───────────── task 9: roundabouts ───────────── */
+.rb-block { margin-top: 0.6rem; font-size: 0.78rem; }
+.rb-block > summary {
+  cursor: pointer; color: var(--text-dim); font-size: 0.72rem;
+  text-transform: uppercase; letter-spacing: 0.07em;
+}
+.rb-list { list-style: none; margin: 0.4rem 0 0; padding: 0; display: grid; gap: 0.18rem; }
+.rb-row { display: grid; grid-template-columns: 3.6rem 1fr auto; gap: 0.4rem; align-items: baseline; }
+.rb-at { font-size: 0.72rem; color: var(--accent); font-variant-numeric: tabular-nums; }
+.rb-name { font-size: 0.76rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rb-exit { font-size: 0.68rem; color: var(--text-dim); white-space: nowrap; }
+/* A missing data source is a warning, not a footnote. */
+.rb-pending { color: var(--warn); opacity: 1; }
+
+/* ───────────── task 10a: printable route output ───────────── */
+.btn-print { width: 100%; margin-top: 0.4rem; }
+
+.print-view {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  overflow: auto;
+  background: #ffffff;
+  color: #111827;
+}
+.print-bar {
+  display: flex; align-items: center; gap: 0.6rem;
+  padding: 0.6rem 1rem; border-bottom: 1px solid #d1d5db; background: #f3f4f6;
+  position: sticky; top: 0;
+}
+.print-hint { font-size: 0.78rem; color: #4b5563; }
+.print-doc { max-width: 48rem; margin: 0 auto; padding: 1.5rem 1.25rem 3rem; }
+.print-head h1 { font-size: 1.4rem; }
+.print-sub { margin: 0.2rem 0 0; font-size: 0.8rem; color: #4b5563; }
+.print-sec { margin-top: 1.4rem; }
+.print-sec h2 { font-size: 0.95rem; border-bottom: 1px solid #d1d5db; padding-bottom: 0.2rem; }
+.print-sec h3 { font-size: 0.82rem; margin: 0.6rem 0 0.15rem; }
+.print-grid { display: grid; grid-template-columns: 9rem 1fr; gap: 0.2rem 0.8rem; margin: 0.5rem 0 0; font-size: 0.86rem; }
+.print-grid dt { color: #4b5563; }
+.print-grid dd { margin: 0; }
+.print-map { width: 100%; border: 1px solid #d1d5db; }
+.print-table { width: 100%; border-collapse: collapse; font-size: 0.82rem; margin-top: 0.4rem; }
+.print-table th { text-align: left; font-weight: 600; border-bottom: 1px solid #9ca3af; padding: 0.15rem 0.3rem; }
+.print-table td { border-bottom: 1px solid #e5e7eb; padding: 0.15rem 0.3rem; }
+.print-note { margin: 0.35rem 0 0; font-size: 0.72rem; color: #4b5563; }
+.print-none { margin: 0.4rem 0 0; font-size: 0.84rem; color: #4b5563; }
+.print-poi-names { margin: 0; font-size: 0.78rem; line-height: 1.5; }
+.print-foot { margin-top: 1.8rem; padding-top: 0.5rem; border-top: 1px solid #d1d5db; font-size: 0.7rem; color: #4b5563; }
+
+@media print {
+  /* Only the document reaches the paper. */
+  .print-hide { display: none !important; }
+  .print-view { position: static; overflow: visible; }
+  .print-doc { max-width: none; padding: 0; }
+  .print-sec { break-inside: avoid; }
+  .print-table { break-inside: auto; }
+  tr { break-inside: avoid; }
+}

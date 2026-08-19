@@ -81,6 +81,83 @@ function maneuvers(route) {
   }));
 }
 
+/* ─────────────── task 9: roundabouts (+ rail crossings) ────────────────── */
+
+/**
+ * Roundabouts along the route, from the guidance instructions.
+ *
+ * Readily available and exact: TomTom returns ROUNDABOUT_LEFT / ROUNDABOUT_RIGHT
+ * maneuvers carrying offsetMeters, the street, and which exit to take — 4 on a Utrecht →
+ * Rotterdam truck route. Nothing is inferred; this is a filter over data already in the
+ * response, which is why it costs no extra call.
+ *
+ * RAILROAD CROSSINGS ARE DELIBERATELY ABSENT. Checked before building: the Orbis style
+ * carries railway LINES only (Surface/Bridge/Tunnel - Railway), there is no
+ * level-crossing point layer, and no POI category for one survived the allowlist
+ * verification. OpenStreetMap's railway=level_crossing would work but needs a new
+ * external dependency (Overpass) outside the vendor-proxied setup, so it is reported as
+ * pending rather than guessed at. A convoy planner acting on invented crossings is worse
+ * off than one told the data is missing.
+ */
+function roundabouts(route) {
+  const list = (route.guidance?.instructions || [])
+    .filter((i) => /ROUNDABOUT/i.test(i.maneuver || ''))
+    .map((i) => ({
+      distanceMeters: i.routeOffsetInMeters ?? null,
+      street: i.street || i.roadNumbers?.[0] || null,
+      exit: i.roundaboutExitNumber ?? null,
+      direction: /LEFT/i.test(i.maneuver) ? 'left' : 'right',
+      message: i.message || null,
+    }))
+    .sort((a, b) => (a.distanceMeters ?? 0) - (b.distanceMeters ?? 0));
+
+  return {
+    count: list.length,
+    items: list,
+    railCrossings: {
+      status: 'pending-data-source',
+      note: 'Railroad crossings: no data source available. TomTom map data carries railway lines but no level-crossing points; adding them would need an OpenStreetMap (railway=level_crossing) feed.',
+    },
+  };
+}
+
+/* ─────────────────── task 8: departure-time routing ─────────────────────── */
+
+/**
+ * Time-dependent routing, verified against the live API.
+ *
+ *   departAt=now            200
+ *   departAt=<ISO8601>      200   (accepts a trailing Z or a local offset)
+ *   arriveAt=<ISO8601>      200   (back-solves the departure time)
+ *   departAt AND arriveAt   400   "Only one of departAt and arriveAt parameters can be set"
+ *
+ * That last one is the reason this is a departure OR arrival choice rather than the
+ * "time window" it might sound like: TomTom has no window parameter, so a window would
+ * have to be faked by picking one end and calling it both.
+ *
+ * The effect is real and worth demonstrating — the same Utrecht -> Rotterdam truck route
+ * with historical traffic: 03:00 52 min, 08:00 57, 12:00 61, 17:00 69, 22:00 53.
+ *
+ * One honest caveat carried through to the UI: for a FUTURE departure TomTom reports
+ * trafficDelayInSeconds as 0, because that field describes live incidents. The travel
+ * time itself does reflect typical traffic for the chosen hour, but there is no separate
+ * delay figure to show, so the UI must not present one.
+ */
+function timeParams(departAt, arriveAt) {
+  const iso = (v) => {
+    if (!v || typeof v !== 'string') return null;
+    if (v === 'now') return 'now';
+    const d = new Date(v);
+    return Number.isNaN(d.getTime()) ? null : d.toISOString().replace(/\.\d{3}Z$/, 'Z');
+  };
+  const dep = iso(departAt);
+  const arr = iso(arriveAt);
+  // Mutually exclusive at the API, so enforce it here rather than forwarding a 400.
+  if (arr && !dep) return { arriveAt: arr };
+  if (dep && dep !== 'now') return { departAt: dep };
+  return {};
+}
+
 /* ─────────────────── task 7: road-type composition ──────────────────────── */
 
 /** Metres between two lon/lat pairs, planar approximation (fine at section scale). */
@@ -176,6 +253,8 @@ routeRouter.post('/', async (req, res, next) => {
     custom,
     maxAlternatives = 3,
     avoid, // task 7
+    departAt, // task 8
+    arriveAt, // task 8
   } = req.body || {};
 
   if (!validPoint(start) || !validPoint(end)) {
@@ -223,6 +302,7 @@ routeRouter.post('/', async (req, res, next) => {
     ],
     // task 7: only values verified against the live API (see AVOID_OPTIONS).
     ...(sanitiseAvoid(avoid).length ? { avoid: sanitiseAvoid(avoid) } : {}),
+    ...timeParams(departAt, arriveAt), // task 8
     /*
      * Turn-by-turn guidance.
      *
@@ -270,6 +350,7 @@ routeRouter.post('/', async (req, res, next) => {
           arrivalTime: s.arrivalTime ?? null,
           trafficSections: trafficSections(r),
           composition: composition(r, coordinates), // task 7
+          roundabouts: roundabouts(r), // task 9
           maneuvers: maneuvers(r),
           maneuverCount: (r.guidance?.instructions || []).length,
         },
@@ -287,6 +368,18 @@ routeRouter.post('/', async (req, res, next) => {
       // task 7: the toggle catalogue, so the UI cannot offer a value the API rejects.
       avoidOptions: AVOID_OPTIONS,
       avoidApplied: sanitiseAvoid(avoid),
+      // task 8: what time basis was actually used, and what is genuinely not supported.
+      timing: {
+        applied: timeParams(departAt, arriveAt),
+        liveTraffic: !timeParams(departAt, arriveAt).departAt && !timeParams(departAt, arriveAt).arriveAt,
+        windowSupported: false,
+        restrictedHours: 'not-implemented',
+        notes: [
+          'departAt and arriveAt are mutually exclusive — TomTom has no time-window parameter.',
+          'For a future time the travel time reflects typical traffic for that hour; TomTom reports no separate delay figure, so none is shown.',
+          'Restricted-hours enforcement (night bans, weekend lorry bans) is NOT a TomTom parameter and is not implemented.',
+        ],
+      },
       profile: { id: profileId, label, spec, travelMode: constraints.travelMode },
       vendor: ROUTING_ENDPOINT.vendor,
       routeCount: routes.length,

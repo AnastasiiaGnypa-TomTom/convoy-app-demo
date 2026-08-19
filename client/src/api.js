@@ -127,7 +127,7 @@ export async function requestChangeDetection({ aoi, from, to }, { signal } = {})
 /** Constraint-aware route + alternatives for a vehicle profile. */
 
 export function requestRoute(
-  { start, end, profileId, custom, maxAlternatives = 3, avoid },
+  { start, end, profileId, custom, maxAlternatives = 3, avoid, departAt, arriveAt },
   { signal } = {},
 ) {
   return request('/api/route', {
@@ -135,6 +135,7 @@ export function requestRoute(
     signal,
     // task 7: `avoid` is validated server-side against the verified list, so an
     // unsupported value here is dropped rather than failing the whole route.
-    body: { start, end, profileId, custom, maxAlternatives, avoid },
+    // task 8: departAt/arriveAt are mutually exclusive; the server enforces that.
+    body: { start, end, profileId, custom, maxAlternatives, avoid, departAt, arriveAt },
   });
 }

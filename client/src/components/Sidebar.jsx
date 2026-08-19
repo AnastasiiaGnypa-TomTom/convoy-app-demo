@@ -58,9 +58,17 @@ export default function Sidebar({
   routeStructures,
   // task 7
   avoidOptions,
+  // task 8
+  timeMode,
+  timeValue,
+  onTimeModeChange,
+  onTimeValueChange,
+  timing,
   avoid,
   onAvoidChange,
   composition,
+  roundabouts, // task 9
+  onPrint, // task 10a
   onSelectStructure,
   highlightedStructureKey,
   routeLoading,
@@ -320,6 +328,59 @@ export default function Sidebar({
                 </div>
               )}
 
+              {/* task 8: when the convoy leaves, which changes the ETA via historical traffic. */}
+              <details className="depart-block">
+                <summary>
+                  Departure time
+                  {timeMode !== 'now' && timeValue
+                    ? ` · ${timeMode === 'arrive' ? 'arrive by' : 'depart'} ${timeValue.slice(11, 16)}`
+                    : ' · now'}
+                </summary>
+                <div className="depart-modes">
+                  {[
+                    ['now', 'Leave now'],
+                    ['depart', 'Depart at'],
+                    ['arrive', 'Arrive by'],
+                  ].map(([id, label]) => (
+                    <button
+                      key={id}
+                      type="button"
+                      className={`depart-mode ${timeMode === id ? 'depart-mode-on' : ''}`}
+                      onClick={() => onTimeModeChange?.(id)}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+                {timeMode !== 'now' && (
+                  <input
+                    type="datetime-local"
+                    className="depart-input"
+                    value={timeValue}
+                    onChange={(e) => onTimeValueChange?.(e.target.value)}
+                  />
+                )}
+                {/*
+                  * Both notes are deliberate. TomTom has no time-WINDOW parameter —
+                  * departAt and arriveAt are mutually exclusive (400 if both are sent) —
+                  * and restricted-hours enforcement is not a routing parameter at all,
+                  * so it is labelled future work rather than implied to work.
+                  */}
+                <p className="depart-note">
+                  Uses typical traffic for the chosen time. A time <em>window</em> is not
+                  supported by routing — pick a departure or an arrival.
+                </p>
+                <p className="depart-note depart-note-future">
+                  Restricted-hours enforcement (night and weekend lorry bans): future work,
+                  not active.
+                </p>
+                {timing?.applied?.departAt && timeMode === 'arrive' && (
+                  <p className="depart-note">
+                    Both a departure and an arrival were set; the departure was used.
+                  </p>
+                )}
+              </details>
+
               {/* task 7: avoidance toggles + what the route is actually made of. */}
               {avoidOptions?.length > 0 && (
                 <details className="avoid-block">
@@ -382,6 +443,39 @@ export default function Sidebar({
                 </details>
               )}
 
+              {/* task 9: roundabouts from the guidance; rail crossings have no source yet. */}
+              {roundabouts && (
+                <details className="rb-block">
+                  <summary>
+                    Roundabouts · {roundabouts.count}
+                  </summary>
+                  {roundabouts.count > 0 ? (
+                    <ul className="rb-list">
+                      {roundabouts.items.map((r, i) => (
+                        <li key={`${r.distanceMeters}-${i}`} className="rb-row">
+                          <span className="rb-at">
+                            {r.distanceMeters < 1000
+                              ? `${Math.round(r.distanceMeters / 10) * 10} m`
+                              : `${(r.distanceMeters / 1000).toFixed(1)} km`}
+                          </span>
+                          <span className="rb-name">{r.street || 'Roundabout'}</span>
+                          {r.exit != null && <span className="rb-exit">exit {r.exit}</span>}
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="comp-note">None on this route.</p>
+                  )}
+                  {/*
+                    * Stated, not hidden. Inventing crossings would be worse than a gap:
+                    * a planner would act on them.
+                    */}
+                  <p className="comp-note rb-pending">
+                    Railroad crossings: pending data source. {roundabouts.railCrossings?.note}
+                  </p>
+                </details>
+              )}
+
               {/*
                 * "Mission planning", not "navigation": this runs an animated fly-through
                 * of the planned route, not live turn-by-turn guidance. Calling it
@@ -391,6 +485,13 @@ export default function Sidebar({
               <button type="button" className="btn-primary btn-go" onClick={onGo}>
                 Start mission planning
               </button>
+
+              {/* task 10a: printable plan. Export only — no sharing, sync or permissions. */}
+              {onPrint && (
+                <button type="button" className="btn-secondary btn-print" onClick={onPrint}>
+                  Print / export plan
+                </button>
+              )}
             </>
           )}
         </Section>
