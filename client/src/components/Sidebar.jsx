@@ -315,8 +315,14 @@ export default function Sidebar({
                 </div>
               )}
 
+              {/*
+                * "Mission planning", not "navigation": this runs an animated fly-through
+                * of the planned route, not live turn-by-turn guidance. Calling it
+                * navigation invited a defence audience to assume in-vehicle guidance,
+                * which is a promise the demo cannot keep.
+                */}
               <button type="button" className="btn-primary btn-go" onClick={onGo}>
-                Start navigation
+                Start mission planning
               </button>
             </>
           )}

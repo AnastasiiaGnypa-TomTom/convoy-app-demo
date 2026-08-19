@@ -4,8 +4,9 @@ import { formatDistance, formatDuration } from '../lib/format.js';
  * The place card — bottom sheet on phones, side panel on desktop (CSS decides).
  *
  * Opens on tapping a POI marker or dropping a pin. Two actions, in the order a
- * navigation app puts them: "Directions" to review the route, "Go" to move
- * immediately. "Go" is what makes POI-to-moving a two-tap flow.
+ * navigation app puts them: "Directions" to review the route, "Go" to start the
+ * mission-planning fly-through immediately. "Go" is what makes POI-to-moving a two-tap
+ * flow.
  */
 export default function PlaceCard({ place, preview, previewLoading, onDirections, onGo, onClose }) {
   if (!place) return null;
@@ -54,7 +55,13 @@ export default function PlaceCard({ place, preview, previewLoading, onDirections
         <button type="button" className="btn-primary" onClick={onDirections}>
           Directions
         </button>
-        <button type="button" className="btn-secondary" onClick={onGo} disabled={!preview}>
+        <button
+          type="button"
+          className="btn-secondary"
+          onClick={onGo}
+          disabled={!preview}
+          title="Start mission planning to here"
+        >
           Go
         </button>
       </div>

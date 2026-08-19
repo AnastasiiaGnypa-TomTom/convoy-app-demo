@@ -14,7 +14,11 @@ const clock = (d) =>
   d ? d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false }) : '—';
 
 /**
- * Full guidance view: maneuver banner on top, trip bar at the bottom.
+ * Full mission-planning view: maneuver banner on top, trip bar at the bottom.
+ *
+ * Wording throughout says "mission planning", not "navigation": this is an animated
+ * fly-through of a planned route for briefing and visualisation, not live turn-by-turn
+ * guidance in a vehicle.
  *
  * Deliberately sparse. Everything here is readable at a glance because it is meant
  * to be looked at while driving — which also makes it read as a navigation app
@@ -52,7 +56,7 @@ export default function NavigateView({
             {maneuver?.street || maneuver?.message || 'Continue'}
           </span>
         </div>
-        <button type="button" className="nav-close" onClick={onEnd} aria-label="End navigation">
+        <button type="button" className="nav-close" onClick={onEnd} aria-label="End mission planning">
           ×
         </button>
       </div>
@@ -102,8 +106,8 @@ export default function NavigateView({
             onClick={onToggleCameraMode}
             title={
               cameraMode === 'overhead'
-                ? 'Overhead (north-up) — tap for the 3D chase camera'
-                : '3D chase camera — tap for overhead north-up'
+                ? 'Overhead (north-up) — tap for the 3D follow camera'
+                : '3D follow camera — tap for overhead north-up'
             }
           >
             {cameraMode === 'overhead' ? '▦' : '◭'}
@@ -112,7 +116,7 @@ export default function NavigateView({
             type="button"
             className={`nav-btn ${voiceOn ? 'nav-btn-on' : ''}`}
             onClick={onToggleVoice}
-            title="Voice guidance"
+            title="Spoken callouts"
           >
             {voiceOn ? '🔊' : '🔇'}
           </button>
@@ -120,7 +124,7 @@ export default function NavigateView({
             type="button"
             className={`nav-btn nav-btn-wide ${source === 'gps' ? 'nav-btn-on' : ''}`}
             onClick={onToggleSource}
-            title={source === 'gps' ? 'Using real GPS' : 'Using the simulated driver'}
+            title={source === 'gps' ? 'Using real GPS' : 'Simulated run — not live guidance'}
           >
             {source === 'gps' ? 'GPS' : 'SIM'}
           </button>
