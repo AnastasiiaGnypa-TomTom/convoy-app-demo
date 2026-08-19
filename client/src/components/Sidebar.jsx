@@ -56,6 +56,8 @@ export default function Sidebar({
   routes,
   selectedIndex,
   routeStructures,
+  onSelectStructure,
+  highlightedStructureKey,
   routeLoading,
   routeError,
   mapCenter,
@@ -270,29 +272,45 @@ export default function Sidebar({
                     </span>
                   </h4>
                   <ul className="route-structures-list">
-                    {routeStructures.map((x, i) => (
-                      <li key={`${x.kind}-${i}`} className={`rs rs-${x.kind}`}>
-                        <span className="rs-glyph" aria-hidden="true">
-                          {x.kind === 'tunnel' ? '◠' : '⌒'}
-                        </span>
-                        <span className="rs-name">
-                          {x.name || (x.kind === 'tunnel' ? 'Tunnel' : 'Bridge')}
-                        </span>
-                        <span className="rs-at">
-                          {x.startDistance < 1000
-                            ? `${Math.round(x.startDistance / 10) * 10} m`
-                            : `${(x.startDistance / 1000).toFixed(1)} km`}
+                    {routeStructures.map((x, i) => {
+                      const key = `${x.kind}-${Math.round(x.startDistance)}`;
+                      const isActive = highlightedStructureKey === key;
+                      return (
+                        <li key={`${x.kind}-${i}`}>
                           {/*
-                            * Length is only shown when it exceeds the detection
-                            * resolution, and is marked approximate. Reporting "122 m"
-                            * off a 25 m sampling step would be false precision.
+                            * A button, not a div with a click handler: these rows are the
+                            * clearance-critical part of the panel, so they need keyboard
+                            * focus and Enter/Space for free.
                             */}
-                          {x.lengthM > (x.resolutionM || 25) * 2
-                            ? ` · ~${Math.round(x.lengthM / 50) * 50} m long`
-                            : ''}
-                        </span>
-                      </li>
-                    ))}
+                          <button
+                            type="button"
+                            className={`rs rs-${x.kind} rs-btn ${isActive ? 'rs-active' : ''}`}
+                            onClick={() => onSelectStructure?.(x, key)}
+                            title="Show this on the map"
+                          >
+                            <span className="rs-glyph" aria-hidden="true">
+                              {x.kind === 'tunnel' ? '◠' : '⌒'}
+                            </span>
+                            <span className="rs-name">
+                              {x.name || (x.kind === 'tunnel' ? 'Tunnel' : 'Bridge')}
+                            </span>
+                            <span className="rs-at">
+                              {x.startDistance < 1000
+                                ? `${Math.round(x.startDistance / 10) * 10} m`
+                                : `${(x.startDistance / 1000).toFixed(1)} km`}
+                              {/*
+                                * Length is only shown when it exceeds the detection
+                                * resolution, and is marked approximate. Reporting "122 m"
+                                * off a 25 m sampling step would be false precision.
+                                */}
+                              {x.lengthM > (x.resolutionM || 25) * 2
+                                ? ` · ~${Math.round(x.lengthM / 50) * 50} m long`
+                                : ''}
+                            </span>
+                          </button>
+                        </li>
+                      );
+                    })}
                   </ul>
                 </div>
               )}

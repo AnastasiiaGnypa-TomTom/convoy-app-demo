@@ -225,8 +225,12 @@ export default function App() {
   const [poiLayerDefs, setPoiLayerDefs] = useState(null);
   /** Which POI layer is currently being pointed out on the map, if any. */
   const [highlightedPoiLayer, setHighlightedPoiLayer] = useState(null);
+  /** The structure picked from the "On this route" list: { structure, key } or null. */
+  const [highlightedStructure, setHighlightedStructure] = useState(null);
   /** One-shot camera fit request: { bounds, token }. */
   const [fitBounds, setFitBounds] = useState(null);
+  /** One-shot centre+zoom request that works even with a route active: { lat, lon, zoom, token }. */
+  const [goTo, setGoTo] = useState(null);
   /** Bridges/tunnels extracted server-side, for zooms below the tile floor. */
   const [extractedStructures, setExtractedStructures] = useState(null);
   /** Structures along the active route — fetched once per route, shown at any zoom. */
@@ -533,6 +537,13 @@ export default function App() {
     return `${selectedIndex ?? 0}:${c.length}:${at(0)}:${at(c.length - 1)}`;
   }, [selectedRouteCoords, selectedIndex]);
 
+  // A structure highlight is meaningless once the route changes beneath it. Placed after
+  // selectedRouteKey is declared: a dependency array is evaluated during render, so
+  // referencing it any earlier is a temporal-dead-zone error that blanks the app.
+  useEffect(() => {
+    setHighlightedStructure(null);
+  }, [selectedRouteKey]);
+
   /*
    * Structures along the active route. Fetched once per route — NOT on pan or zoom,
    * because a corridor does not depend on where the camera is looking.
@@ -765,6 +776,28 @@ export default function App() {
       .sort((a, b) => a.startDistance - b.startDistance)
       .slice(0, 40);
   }, [routeStructures, routeStructureLines]);
+
+  /**
+   * Clicking a row in "On this route": go there and mark it.
+   *
+   * Zoom 15 rather than closer: a structure needs its approach either side to be worth
+   * looking at, and for a long tunnel a tight zoom shows nothing but the middle of it.
+   * The marker stays until another row is clicked or the route changes — unlike the POI
+   * ring, which is a momentary "these ones", this is "the one I am inspecting".
+   */
+  const handleSelectStructure = useCallback((structure, key) => {
+    if (!structure?.coord) return;
+    setHighlightedStructure({ structure, key });
+    /*
+     * A dedicated camera request, NOT the `flyTo` prop.
+     *
+     * The flyTo effect deliberately bails out whenever a route exists, so that a search
+     * result cannot fight the route's own fit. This list only exists WITH a route, so
+     * reusing flyTo meant the marker appeared and the camera never moved. The token lets
+     * the same row be clicked twice and still re-centre.
+     */
+    setGoTo({ lat: structure.coord[1], lon: structure.coord[0], zoom: 15, token: Date.now() });
+  }, []);
 
   const handleLocatePoiLayer = useCallback(
     (layerId) => {
@@ -1256,6 +1289,8 @@ export default function App() {
             custom={custom}
             routes={routeData?.routes}
             routeStructures={routeStructureList}
+            onSelectStructure={handleSelectStructure}
+            highlightedStructureKey={highlightedStructure?.key || null}
             selectedIndex={selectedIndex}
             routeLoading={routeLoading}
             routeError={error}
@@ -1446,6 +1481,8 @@ export default function App() {
               poiData={poiData}
               poiOn={poiOn && !navMode}
               highlightedPoiLayer={highlightedPoiLayer}
+              highlightedStructure={highlightedStructure?.structure || null}
+              goTo={goTo}
               fitBounds={fitBounds}
               navigating={navMode}
               navSplit={navSplit}

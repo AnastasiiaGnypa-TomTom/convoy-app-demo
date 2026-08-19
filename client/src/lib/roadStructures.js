@@ -960,3 +960,150 @@ export function raiseRouteStructureLayers(map) {
     }
   }
 }
+
+/* ───────────────────── highlighted structure (panel -> map) ───────────────── */
+
+const HIGHLIGHT_SOURCE = 'struct-highlight-src';
+export const HIGHLIGHT_LAYERS = {
+  pulse: 'struct-highlight-pulse',
+  ring: 'struct-highlight-ring',
+  dot: 'struct-highlight-dot',
+};
+
+/**
+ * A marker for the one structure the user picked in the "On this route" list.
+ *
+ * Deliberately a white ring around a kind-coloured dot: over satellite imagery a single
+ * coloured circle disappears into whatever happens to be underneath it, and the pink and
+ * lime already carry meaning on the lines themselves. White reads against imagery,
+ * terrain and the vector basemap alike, so the emphasis is legible everywhere without
+ * inventing a fourth colour.
+ *
+ * The pulse ring is a separate layer so it can be animated without touching the marker,
+ * and removing the highlight is one setData(null) — nothing about the structure layers
+ * changes, so this is fully reversible.
+ */
+export function ensureHighlightLayers(map) {
+  if (!map.getSource(HIGHLIGHT_SOURCE)) {
+    map.addSource(HIGHLIGHT_SOURCE, { type: 'geojson', data: EMPTY });
+  }
+  if (map.getLayer(HIGHLIGHT_LAYERS.dot)) return;
+
+  map.addLayer({
+    id: HIGHLIGHT_LAYERS.pulse,
+    type: 'circle',
+    source: HIGHLIGHT_SOURCE,
+    paint: {
+      'circle-radius': 14,
+      'circle-color': 'rgba(255,255,255,0)',
+      'circle-stroke-width': 2,
+      'circle-stroke-color': 'rgba(255,255,255,0.85)',
+    },
+  });
+  map.addLayer({
+    id: HIGHLIGHT_LAYERS.ring,
+    type: 'circle',
+    source: HIGHLIGHT_SOURCE,
+    paint: {
+      'circle-radius': 9,
+      'circle-color': 'rgba(11,16,22,0.55)',
+      'circle-stroke-width': 3,
+      'circle-stroke-color': '#ffffff',
+    },
+  });
+  map.addLayer({
+    id: HIGHLIGHT_LAYERS.dot,
+    type: 'circle',
+    source: HIGHLIGHT_SOURCE,
+    paint: {
+      'circle-radius': 4.5,
+      'circle-color': ['match', ['get', 'kind'], 'tunnel', TUNNEL_COLOR, BRIDGE_COLOR],
+    },
+  });
+}
+
+/** Show (or clear, with null) the highlighted structure. */
+export function setHighlightedStructure(map, structure) {
+  const src = map.getSource(HIGHLIGHT_SOURCE);
+  if (!src) return;
+  if (!structure?.coord) {
+    src.setData(EMPTY);
+    return;
+  }
+  src.setData({
+    type: 'FeatureCollection',
+    features: [
+      {
+        type: 'Feature',
+        geometry: { type: 'Point', coordinates: structure.coord },
+        properties: { kind: structure.kind || 'bridge' },
+      },
+    ],
+  });
+}
+
+/**
+ * Animate the outer ring outwards, twice, then stop.
+ *
+ * Two pulses rather than a permanent loop: it draws the eye when the row is clicked and
+ * then leaves a static marker, so the map is not animating for the rest of the demo.
+ * Returns a cancel function.
+ */
+export function pulseHighlight(map) {
+  if (!map.getLayer(HIGHLIGHT_LAYERS.pulse)) return () => {};
+  const DURATION = 900;
+  const PULSES = 2;
+  let raf = null;
+  let start = null;
+  let cancelled = false;
+
+  const frame = (ts) => {
+    if (cancelled) return;
+    if (start == null) start = ts;
+    const elapsed = ts - start;
+    if (elapsed > DURATION * PULSES) {
+      try {
+        map.setPaintProperty(HIGHLIGHT_LAYERS.pulse, 'circle-radius', 14);
+        map.setPaintProperty(HIGHLIGHT_LAYERS.pulse, 'circle-stroke-color', 'rgba(255,255,255,0.85)');
+      } catch {
+        /* layer gone */
+      }
+      return;
+    }
+    const t = (elapsed % DURATION) / DURATION;
+    try {
+      map.setPaintProperty(HIGHLIGHT_LAYERS.pulse, 'circle-radius', 12 + t * 20);
+      map.setPaintProperty(
+        HIGHLIGHT_LAYERS.pulse,
+        'circle-stroke-color',
+        `rgba(255,255,255,${(0.85 * (1 - t)).toFixed(3)})`,
+      );
+    } catch {
+      return;
+    }
+    raf = requestAnimationFrame(frame);
+  };
+  raf = requestAnimationFrame(frame);
+  return () => {
+    cancelled = true;
+    if (raf) cancelAnimationFrame(raf);
+  };
+}
+
+/**
+ * The inspection marker goes above everything, including the POI icons.
+ *
+ * It is a deliberate, transient answer to "where is this one" — if a fuel pin covered it
+ * the click would appear to do nothing.
+ */
+export function raiseHighlightLayers(map) {
+  for (const id of [HIGHLIGHT_LAYERS.pulse, HIGHLIGHT_LAYERS.ring, HIGHLIGHT_LAYERS.dot]) {
+    if (map.getLayer(id)) {
+      try {
+        map.moveLayer(id);
+      } catch {
+        /* mid style-swap */
+      }
+    }
+  }
+}

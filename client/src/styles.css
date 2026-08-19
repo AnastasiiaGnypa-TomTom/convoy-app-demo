@@ -2469,3 +2469,24 @@ h2 {
   background: var(--accent);
   border-color: var(--accent);
 }
+
+/* Clickable "On this route" rows. */
+.rs-btn {
+  width: 100%;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  border-radius: 5px;
+  padding: 0.18rem 0.3rem;
+  transition: background 0.12s;
+}
+.rs-btn:hover { background: var(--surface-2); }
+.rs-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+/* The row being inspected: a left marker rather than a fill, so the kind colour still reads. */
+.rs-active {
+  background: var(--surface-2);
+  box-shadow: inset 2px 0 0 #ffffff;
+}

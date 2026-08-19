@@ -59,7 +59,11 @@ import {
   setRouteStructureLinesVisible,
   setExtractedStructures,
   setExtractedVisible,
+  ensureHighlightLayers,
+  raiseHighlightLayers,
   ensureStructureLayers,
+  pulseHighlight,
+  setHighlightedStructure,
   setStructuresVisible,
   setRouteStructures,
   findRouteStructures,
@@ -93,6 +97,8 @@ export default function MapView({
   poiData,
   poiOn,
   highlightedPoiLayer,
+  highlightedStructure,
+  goTo,
   fitBounds,
   structuresOn,
   extractedStructures,
@@ -598,6 +604,8 @@ export default function MapView({
         // route < structures < POI icons.
         raiseRouteStructureLayers(map);
         raisePoiLayers(map);
+        // Last, so the inspection marker is never covered.
+        raiseHighlightLayers(map);
       } catch (err) {
         console.warn('[poi order]', err.message);
       }
@@ -605,7 +613,22 @@ export default function MapView({
     lift();
     map.on('styledata', lift);
     return () => map.off('styledata', lift);
-  }, [ready, poiData, poiCategories, routeData, extractedStructures, routeStructureLines, steepGeoJSON, exaggeration]);
+  }, [ready, poiData, poiCategories, routeData, extractedStructures, routeStructureLines, steepGeoJSON, exaggeration, highlightedStructure]);
+
+  /* --------------------------- highlighted structure (from the panel) */
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !ready) return;
+    let cancelPulse = () => {};
+    try {
+      ensureHighlightLayers(map);
+      setHighlightedStructure(map, highlightedStructure);
+      if (highlightedStructure) cancelPulse = pulseHighlight(map);
+    } catch (err) {
+      console.warn('[structure highlight]', err.message);
+    }
+    return () => cancelPulse();
+  }, [highlightedStructure, ready, routeStructureLines]);
 
   /* ------------------------------------- "show me these" fit + highlight */
   useEffect(() => {
@@ -961,6 +984,20 @@ export default function MapView({
     // every time a route recalculates.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [flyTo, ready]);
+
+  /*
+   * Direct centre+zoom, not gated on whether a route exists.
+   *
+   * Separate from the `flyTo` effect above on purpose: that one must stand down when a
+   * route is present so it cannot fight the route fit, whereas this is an explicit user
+   * request to go and look at one structure.
+   */
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !ready || !goTo) return;
+    programmaticMoveRef.current = true;
+    cameraRef.current?.goTo({ coord: [goTo.lon, goTo.lat], zoom: goTo.zoom ?? 15 });
+  }, [goTo, ready]);
 
   /* ------------------------------------------------------ picking cursor */
   useEffect(() => {
