@@ -41,7 +41,13 @@ app.disable('x-powered-by');
  */
 app.set('trust proxy', 1);
 app.use(compression());
-app.use(express.json({ limit: '256kb' }));
+/*
+ * 1mb, up from 256kb. The client now downsamples route geometry before posting, so this
+ * is a safety net rather than the mechanism: a long alternative used to arrive as ~450 KB
+ * of coordinates and get a 413, which surfaced as that alternative showing no POIs at all
+ * rather than as an error anyone would notice.
+ */
+app.use(express.json({ limit: '1mb' }));
 
 /*
  * Security headers. Modest on purpose — this is a map app, not a form: there is no

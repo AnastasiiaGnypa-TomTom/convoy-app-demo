@@ -481,9 +481,57 @@ export default function App() {
    * With no route, fall back to a viewport category browse. Either way the query
    * carries category ids only — never free text.
    */
-  const selectedRouteCoords =
-    routeData?.routes?.features?.find((f) => f.properties.index === (selectedIndex ?? 0))?.geometry
-      ?.coordinates || null;
+  /*
+   * Route points to POST for corridor queries.
+   *
+   * A 469 km alternative arrives as ~9,000 coordinates, about 450 KB of JSON, which
+   * exceeded the server's body limit and returned 413 — so that alternative silently
+   * showed zero POIs while the shorter ones worked. Corridor membership is measured
+   * against an 8 km buffer, so points every few hundred metres add nothing: 600 points
+   * over 469 km is a sample every ~780 m, far finer than the buffer it feeds.
+   */
+  const MAX_CORRIDOR_POINTS = 600;
+  const corridorPoints = useCallback((coords) => {
+    if (!coords?.length) return [];
+    if (coords.length <= MAX_CORRIDOR_POINTS) return coords.map(([lon, lat]) => ({ lat, lon }));
+    const step = (coords.length - 1) / (MAX_CORRIDOR_POINTS - 1);
+    const out = [];
+    for (let i = 0; i < MAX_CORRIDOR_POINTS; i++) {
+      const [lon, lat] = coords[Math.round(i * step)];
+      out.push({ lat, lon });
+    }
+    return out;
+  }, []);
+
+  const selectedRouteCoords = useMemo(
+    () =>
+      routeData?.routes?.features?.find((f) => f.properties.index === (selectedIndex ?? 0))
+        ?.geometry?.coordinates || null,
+    [routeData, selectedIndex],
+  );
+
+  /*
+   * Identity of the route the POI corridor was fetched for.
+   *
+   * This is the fix for alternatives not refreshing their POIs. The fetch key used to be
+   * just `layers|route:corridorKm`, which carries no information about WHICH route — so
+   * switching primary <-> alternative produced an identical key, the "already fetched"
+   * guard matched, and the request was skipped. The POIs stayed on the previous
+   * alternative's corridor.
+   *
+   * The same flaw silently affected changing the origin or destination: index 0 stays 0,
+   * so that key matched too and the corridor was never refetched for the new route.
+   *
+   * Fingerprint rather than index alone: the index is stable across different routes, so
+   * it cannot detect a new origin/destination on its own. Point count plus the rounded
+   * endpoints changes for any genuinely different geometry and is O(1) to compute.
+   */
+  const selectedRouteKey = useMemo(() => {
+    const c = selectedRouteCoords;
+    if (!c?.length) return null;
+    const at = (i) => `${c[i][0].toFixed(4)},${c[i][1].toFixed(4)}`;
+    return `${selectedIndex ?? 0}:${c.length}:${at(0)}:${at(c.length - 1)}`;
+  }, [selectedRouteCoords, selectedIndex]);
 
   /*
    * Structures along the active route. Fetched once per route — NOT on pan or zoom,
@@ -503,7 +551,7 @@ export default function App() {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
-          route: selectedRouteCoords.map(([lon, lat]) => ({ lat, lon })),
+          route: corridorPoints(selectedRouteCoords),
           corridorM: 1200,
         }),
         signal: ctl.signal,
@@ -538,6 +586,17 @@ export default function App() {
    *     every new request, so a transient error emptied the map.
    */
   const poiFetchRef = useRef({ box: null, key: null, zoom: null });
+  /*
+   * Key of the most recently STARTED POI request.
+   *
+   * Needed because switching alternatives fires a new corridor fetch while the previous
+   * one may still be in flight, and the two take very different times — a 271 km
+   * alternative sweeps far more samples than a 160 km one. Without this, whichever
+   * response happens to land last wins, so the map could end up showing the POIs of a
+   * route the user already switched away from. Measured exactly that: two different
+   * geometries posted, identical POI set displayed.
+   */
+  const poiInFlightRef = useRef(null);
 
   useEffect(() => {
     if (!poiOn || !poiSelected.length) {
@@ -548,7 +607,7 @@ export default function App() {
     if (!selectedRouteCoords && !bounds) return;
 
     // Identifies the query apart from the viewport.
-    const key = `${[...poiSelected].sort().join(',')}|${selectedRouteCoords ? `route:${corridorKm}` : 'view'}`;
+    const key = `${[...poiSelected].sort().join(',')}|${selectedRouteKey ? `route:${corridorKm}:${selectedRouteKey}` : 'view'}`;
     const prev = poiFetchRef.current;
 
     if (key === prev.key) {
@@ -600,7 +659,7 @@ export default function App() {
       const request = selectedRouteCoords
         ? fetchPoisAlongRoute(
             {
-              route: selectedRouteCoords.map(([lon, lat]) => ({ lat, lon })),
+              route: corridorPoints(selectedRouteCoords),
               layers: poiSelected,
               corridorKm,
             },
@@ -608,8 +667,11 @@ export default function App() {
           )
         : fetchPois(padded, poiSelected, { signal: ctl.signal });
 
+      poiInFlightRef.current = key;
       request
         .then((data) => {
+          // Ignore a response that has been superseded — see poiInFlightRef.
+          if (poiInFlightRef.current !== key) return;
           setPoiData(data);
           poiFetchRef.current = { box: selectedRouteCoords ? null : padded, key, zoom };
         })
@@ -624,7 +686,7 @@ export default function App() {
       clearTimeout(timer);
       ctl.abort();
     };
-  }, [poiOn, poiSelected, bounds, zoom, selectedRouteCoords, corridorKm]);
+  }, [poiOn, poiSelected, bounds, zoom, selectedRouteCoords, selectedRouteKey, corridorKm, corridorPoints]);
 
   /**
    * "Show me these" — frames the POIs of one layer and marks them.

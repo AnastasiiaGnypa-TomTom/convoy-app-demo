@@ -135,6 +135,13 @@ const MAX_RADIUS_M = 50_000;
  * the rate limit if this proves too eager.
  */
 const CONCURRENCY = 6;
+/*
+ * The corridor sweep fans out per SAMPLE per layer, so a long route can be dozens of
+ * calls where the viewport browse is at most one per layer. At concurrency 6 that drew
+ * `TomTom returned HTTP 429` on several samples, and a failed sample is a hole in the
+ * corridor. Lower cap here; the viewport path keeps the faster one.
+ */
+const ROUTE_SWEEP_CONCURRENCY = 3;
 const RETRY_DELAYS_MS = [400, 1100, 2400];
 
 const poiCache = createCache({ ttlMs: 5 * 60_000 });
@@ -597,7 +604,7 @@ poisRouter.post('/along-route', async (req, res, next) => {
           return { id, sampleIndex, results: json.results || [] };
         }),
       ),
-      CONCURRENCY,
+      ROUTE_SWEEP_CONCURRENCY,
     );
 
     const features = [];
