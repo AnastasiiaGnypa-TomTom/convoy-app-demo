@@ -23,6 +23,7 @@ export default function PoiPanel({
   onToggleEnabled,
   onToggleLayer,
   onSelectPreset,
+  onCorridorChange,
 }) {
   if (!layers?.length) return null;
 
@@ -119,6 +120,38 @@ export default function PoiPanel({
             {!loading && capped?.length > 0 && (
               <span className="poi-trunc"> · capped at 50 per layer</span>
             )}
+
+          {/*
+            * Corridor width, shown only with a route active — it has no meaning for a
+            * viewport browse. Primary unit is km to match the rest of the app and the
+            * scale bar; miles are shown too because the convoy default is stated in
+            * miles. Untouched, it stays at the 5-mile default.
+            */}
+          {mode === 'along-route' && onCorridorChange && (
+            <div className="corridor-control">
+              <label className="corridor-head" htmlFor="corridor-range">
+                <span>Buffer each side of the route</span>
+                <span className="corridor-value">
+                  {Number(corridorKm).toFixed(1)} km · {(Number(corridorKm) / 1.609).toFixed(1)} mi
+                </span>
+              </label>
+              <input
+                id="corridor-range"
+                type="range"
+                min="1.61"
+                max="24.15"
+                step="0.805"
+                value={corridorKm}
+                onChange={(e) => onCorridorChange(Number(e.target.value))}
+              />
+              <div className="corridor-scale" aria-hidden="true">
+                <span>1 mi</span>
+                <span>5 mi</span>
+                <span>15 mi</span>
+              </div>
+              <p className="corridor-note">A wider buffer finds more POIs and takes longer to load.</p>
+            </div>
+          )}
           </p>
 
           {/* Proof the runtime assertion is doing work, not decoration. */}

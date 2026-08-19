@@ -250,6 +250,16 @@ export default function App() {
   const [poiLoading, setPoiLoading] = useState(false);
   // 8.05 km = 5 miles either side of the route; the server is the authority.
   const [corridorKm, setCorridorKm] = useState(8.05);
+  /*
+   * What the slider shows while being dragged.
+   *
+   * Separate from `corridorKm` so the label tracks the thumb at 60fps while the actual
+   * refetch waits for the drag to settle — a slider wired straight to the query would
+   * fire a corridor sweep for every intermediate value, and each sweep is dozens of
+   * vendor calls.
+   */
+  const [corridorDraft, setCorridorDraft] = useState(8.05);
+  const corridorTimerRef = useRef(null);
 
   const [imageryMode, setImageryMode] = useState(null);
   // What is actually rendered: seamless falls back to latest where no mosaic exists.
@@ -785,6 +795,15 @@ export default function App() {
    * The marker stays until another row is clicked or the route changes — unlike the POI
    * ring, which is a momentary "these ones", this is "the one I am inspecting".
    */
+  const handleCorridorChange = useCallback((km) => {
+    setCorridorDraft(km);
+    if (corridorTimerRef.current) clearTimeout(corridorTimerRef.current);
+    // 450ms: long enough to swallow a drag, short enough not to feel broken on a click.
+    corridorTimerRef.current = setTimeout(() => setCorridorKm(km), 450);
+  }, []);
+
+  useEffect(() => () => clearTimeout(corridorTimerRef.current), []);
+
   const handleSelectStructure = useCallback((structure, key) => {
     if (!structure?.coord) return;
     setHighlightedStructure({ structure, key });
@@ -1395,7 +1414,8 @@ export default function App() {
                     enabled
                     loading={poiLoading}
                     mode={poiData?.mode}
-                    corridorKm={poiData?.corridorKm || corridorKm}
+                    corridorKm={corridorDraft}
+                    onCorridorChange={handleCorridorChange}
                     total={poiData?.features?.length || 0}
                     droppedOutOfCategory={poiData?.droppedOutOfCategory || 0}
                     onToggleEnabled={() => setPoiOn((v) => !v)}
