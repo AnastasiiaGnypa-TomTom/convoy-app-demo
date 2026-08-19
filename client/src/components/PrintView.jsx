@@ -1,4 +1,4 @@
-import { formatDistance, formatDuration } from '../lib/format.js';
+import { formatDistance, formatDuration, formatVehicleSpec } from '../lib/format.js';
 
 /*
  * task 10a: printable route output.
@@ -78,7 +78,12 @@ export default function PrintView({
             <dt>Vehicle</dt>
             <dd>
               {profileLabel || '—'}
-              {profileSpec ? ` — ${profileSpec}` : ''}
+              {/*
+                * formatVehicleSpec, not the raw object: `spec` is
+                * {weightKg, heightM, ...}, which interpolated straight into JSX printed
+                * "[object Object]" on the page.
+                */}
+              {profileSpec ? ` — ${formatVehicleSpec(profileSpec)}` : ''}
             </dd>
             <dt>Distance</dt>
             <dd>{formatDistance(p.lengthMeters)}</dd>
