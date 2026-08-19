@@ -2527,3 +2527,59 @@ h2 {
   color: var(--text-dim);
   opacity: 0.85;
 }
+
+/* ───────────────── elevation strip, docked under the map ───────────────── */
+/*
+ * Relocated from the side panel. Revert by removing .map-col (App.jsx) and passing the
+ * <ElevationProfile> back into the Sidebar's elevationPanel prop, which still exists.
+ */
+.map-col {
+  display: grid;
+  grid-template-rows: 1fr auto;
+  min-height: 0;
+  min-width: 0;
+}
+
+.elev-strip {
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.elev-strip-handle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  width: 100%;
+  padding: 0.3rem 0.75rem;
+  background: none;
+  border: 0;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  cursor: pointer;
+}
+.elev-strip-handle:hover { color: var(--text); }
+.elev-strip-handle:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.elev-strip-chev { font-size: 0.8rem; }
+
+/* Fixed height so the map's height is predictable, and the chart fills the width. */
+.elev-strip-body {
+  height: 8.5rem;
+  padding: 0 0.75rem 0.5rem;
+  overflow: hidden;
+}
+.elev-strip-body > * { height: 100%; }
+
+/* Collapsed: only the handle remains, so the map gets the rest. */
+.elev-strip-closed .elev-strip-body { display: none; }
+
+@media (max-width: 760px) {
+  /* Shorter on a phone, where map height is scarcer than chart detail. */
+  .elev-strip-body { height: 6.5rem; }
+}

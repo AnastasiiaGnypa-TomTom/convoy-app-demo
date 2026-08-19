@@ -232,6 +232,28 @@ export default function App() {
   const [fitBounds, setFitBounds] = useState(null);
   /** One-shot centre+zoom request that works even with a route active: { lat, lon, zoom, token }. */
   const [goTo, setGoTo] = useState(null);
+  /*
+   * The elevation strip below the map, and a counter that tells MapView to resize.
+   *
+   * Opening or closing the strip changes the map container's HEIGHT. MapLibre reads its
+   * canvas size once and caches it, so without an explicit resize the map renders at the
+   * old height — visibly cut off, and every click lands at the wrong coordinate because
+   * projection uses the stale size. A counter rather than a boolean so repeated toggles
+   * each produce a distinct signal.
+   */
+  const [elevStripOpen, setElevStripOpen] = useState(true);
+  const [mapResizeToken, setMapResizeToken] = useState(0);
+
+  const elevStripAvailable = Boolean(
+    routeData?.routes?.features?.length && elevProfile && !elevProfile.insufficient,
+  );
+
+  const toggleElevStrip = useCallback(() => {
+    setElevStripOpen((v) => !v);
+    // The map's height is about to change; MapView resizes on this token.
+    setMapResizeToken((n) => n + 1);
+  }, []);
+
   /** Bridges/tunnels extracted server-side, for zooms below the tile floor. */
   const [extractedStructures, setExtractedStructures] = useState(null);
   /** Structures along the active route — fetched once per route, shown at any zoom. */
@@ -547,6 +569,12 @@ export default function App() {
     const at = (i) => `${c[i][0].toFixed(4)},${c[i][1].toFixed(4)}`;
     return `${selectedIndex ?? 0}:${c.length}:${at(0)}:${at(c.length - 1)}`;
   }, [selectedRouteCoords, selectedIndex]);
+
+  // The strip appearing or disappearing changes the map height just as much as toggling
+  // it does, so that transition needs the same resize.
+  useEffect(() => {
+    setMapResizeToken((n) => n + 1);
+  }, [elevStripAvailable]);
 
   // A structure highlight is meaningless once the route changes beneath it. Placed after
   // selectedRouteKey is declared: a dependency array is evaluated during render, so
@@ -1506,19 +1534,17 @@ export default function App() {
                 onCompare={handleCompare}
               />
             }
-            elevationPanel={
-              <ElevationProfile
-                profile={elevProfile}
-                vehicleLabel={routeData?.profile?.label || 'this vehicle'}
-                gradeLimit={activeGradeLimit}
-                unavailableReason={
-                  !terrainMeta?.available ? 'No elevation source available for this area.' : null
-                }
-              />
-            }
+            /*
+             * Relocated: the profile now lives in a full-width strip under the map (see
+             * .elev-strip below), where distance-on-X has the whole map width instead of
+             * a 19rem column. Passing null keeps the Sidebar section supported, so
+             * putting the component back here is a one-line revert.
+             */
+            elevationPanel={null}
           />
         )}
 
+        <div className="map-col">
         <div className="map-wrap">
           {config ? (
             <MapView
@@ -1650,6 +1676,44 @@ export default function App() {
               Loading POIs…
             </div>
           )}
+        </div>
+
+        {/*
+          * Elevation as a full-width strip under the map.
+          *
+          * Moved out of the side panel because the chart's X axis is distance: in a 19rem
+          * column a 160 km route was compressed into ~250px, so a 6% climb and a flat
+          * stretch looked much the same. Across the map's width it reads as a profile.
+          * Only rendered when a route actually has a usable profile, so it never takes
+          * height for an empty chart.
+          */}
+        {elevStripAvailable && (
+          <section className={`elev-strip ${elevStripOpen ? '' : 'elev-strip-closed'}`}>
+            <button
+              type="button"
+              className="elev-strip-handle"
+              onClick={toggleElevStrip}
+              aria-expanded={elevStripOpen}
+            >
+              <span className="elev-strip-title">Elevation profile</span>
+              <span className="elev-strip-chev" aria-hidden="true">
+                {elevStripOpen ? '▾' : '▴'}
+              </span>
+            </button>
+            {elevStripOpen && (
+              <div className="elev-strip-body">
+                <ElevationProfile
+                  profile={elevProfile}
+                  vehicleLabel={routeData?.profile?.label || 'this vehicle'}
+                  gradeLimit={activeGradeLimit}
+                  unavailableReason={
+                    !terrainMeta?.available ? 'No elevation source available for this area.' : null
+                  }
+                />
+              </div>
+            )}
+          </section>
+        )}
         </div>
       </main>
 

@@ -177,6 +177,30 @@ export function createCameraController(map) {
       }
       const smoothed = smoothBearing(lastBearing, bearing ?? lastBearing ?? 0, 0.35);
       lastBearing = smoothed;
+
+      /*
+       * Re-assert zoom and pitch ONLY if they have drifted.
+       *
+       * The entry ease can be cut short — a container resize landing inside its 900ms
+       * (which is exactly what happens when the layout changes as mission planning
+       * starts) leaves the camera wherever the ease had reached. Measured: frozen at
+       * zoom 11.74 / pitch 10 instead of 16.5 / 60, following the vehicle correctly but
+       * from a wide, flat view, so the arrow was a dot at screen centre.
+       *
+       * Since `follow` never re-asserted zoom or pitch — deliberately, because doing it
+       * every frame was the original stutter — the camera stayed stuck there for the
+       * whole drive. Correcting only on a real discrepancy keeps the per-frame path a
+       * plain centre+bearing jump while making the entry self-healing.
+       */
+      const wantZoom = NAV_ZOOM;
+      const wantPitch = narrow() ? NAV_PITCH_NARROW : NAV_PITCH;
+      const drifted =
+        Math.abs(map.getZoom() - wantZoom) > 0.3 || Math.abs(map.getPitch() - wantPitch) > 4;
+
+      if (drifted) {
+        map.jumpTo({ center: coord, bearing: smoothed, zoom: wantZoom, pitch: wantPitch });
+        return;
+      }
       map.jumpTo({ center: coord, bearing: smoothed });
     },
 
