@@ -43,6 +43,7 @@ import {
   createRollingPrefetch,
   prefetchStartBuffer,
 } from './lib/tilePrefetch.js';
+import { ON_ROUTE_OFFSET_M } from './lib/roadStructures.js';
 import { useVoiceGuidance } from './hooks/useVoiceGuidance.js';
 
 /**
@@ -748,6 +749,15 @@ export default function App() {
     const MAJOR = ['motorway', 'trunk', 'primary'];
     const significant = feats.filter((f) => {
       const p = f.properties || {};
+      /*
+       * ON the route, not merely near it.
+       *
+       * The server's corridor is deliberately wide (1.2 km) because that set is useful
+       * context on the map, but listing all of it under "On this route" was wrong:
+       * measured on a Utrecht route, 158 of 228 returned structures were more than 300 m
+       * from the path, so clicking a row could fly to a bridge the convoy never touches.
+       */
+      if (typeof p.offset_m === 'number' && p.offset_m > ON_ROUTE_OFFSET_M) return false;
       return Number(p.length_m) >= 100 || MAJOR.includes(p.category);
     });
 
@@ -767,6 +777,22 @@ export default function App() {
          * ~1.1 km. The longest fragment is the better estimate of the structure itself.
          */
         prev.lengthM = Math.max(prev.lengthM, lengthM);
+        /*
+         * Keep the coordinate of the fragment CLOSEST to the route.
+         *
+         * Fragments merge by kind + name + a 250 m distance bucket, which can group two
+         * genuinely separate structures sharing a street name. Taking the first
+         * fragment's coordinate then sent the camera to the wrong one — measured 2,735 m
+         * off the route. The nearest fragment is the one the convoy actually crosses.
+         */
+        const off = Number(p.offset_m);
+        if (Number.isFinite(off) && off < prev.offsetM) {
+          prev.offsetM = off;
+          prev.coord =
+            (f.geometry.type === 'MultiLineString'
+              ? f.geometry.coordinates[0]?.[0]
+              : f.geometry.coordinates?.[0]) || prev.coord;
+        }
         continue;
       }
       byKey.set(key, {
@@ -775,6 +801,7 @@ export default function App() {
         startDistance,
         endDistance: startDistance,
         lengthM,
+        offsetM: Number.isFinite(Number(p.offset_m)) ? Number(p.offset_m) : Infinity,
         resolutionM: 50,
         coord: (f.geometry.type === 'MultiLineString'
           ? f.geometry.coordinates[0]?.[0]
@@ -782,10 +809,42 @@ export default function App() {
       });
     }
     // Capped so the panel stays readable; the map still shows every structure.
+    /*
+     * Last check, against the geometry the MAP is drawing.
+     *
+     * Everything above relies on the server's offset_m and on merge bookkeeping being
+     * right. This measures the coordinate each row will actually fly to against the
+     * selected route itself, so a row survives only if it is genuinely on the path no
+     * matter what went wrong upstream — a row that flies 2.7 km away is worse than a
+     * missing row when the list drives clearance decisions. Cheap: one pass over a few
+     * dozen rows.
+     */
+    const line = selectedRouteCoords || [];
+    const offsetOf = ([lon, lat]) => {
+      const mPerLon = Math.cos((lat * Math.PI) / 180) * 111320;
+      let best = Infinity;
+      for (let i = 1; i < line.length; i++) {
+        const ax = (line[i - 1][0] - lon) * mPerLon;
+        const ay = (line[i - 1][1] - lat) * 110540;
+        const bx = (line[i][0] - lon) * mPerLon;
+        const by = (line[i][1] - lat) * 110540;
+        const vx = bx - ax;
+        const vy = by - ay;
+        const l2 = vx * vx + vy * vy;
+        const t = l2 > 0 ? Math.max(0, Math.min(1, -(ax * vx + ay * vy) / l2)) : 0;
+        const px = ax + vx * t;
+        const py = ay + vy * t;
+        const d2 = px * px + py * py;
+        if (d2 < best) best = d2;
+      }
+      return Math.sqrt(best);
+    };
+
     return [...byKey.values()]
+      .filter((x) => x.coord && (line.length < 2 || offsetOf(x.coord) <= ON_ROUTE_OFFSET_M * 2))
       .sort((a, b) => a.startDistance - b.startDistance)
       .slice(0, 40);
-  }, [routeStructures, routeStructureLines]);
+  }, [routeStructures, routeStructureLines, selectedRouteCoords]);
 
   /**
    * Clicking a row in "On this route": go there and mark it.

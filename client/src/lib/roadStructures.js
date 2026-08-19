@@ -830,6 +830,27 @@ export function setExtractedVisible(map, visible) {
 /* ──────── structures along the active route, visible at ANY zoom ──────── */
 
 const ROUTE_LINE_SOURCE = 'struct-route-src';
+/**
+ * How close a structure must come to the route to count as ON it.
+ *
+ * The server returns everything within a wide corridor (1.2 km) because that set is
+ * useful as context, but only a fraction of it is road the convoy actually crosses.
+ * Measured on a Utrecht -> Rotterdam route: of 228 structures in the corridor, 31 were
+ * within 20 m and 158 were over 300 m away. Without this threshold all 228 were listed
+ * as "On this route", so clicking a row could fly to a bridge a kilometre off the path.
+ *
+ * 40 m rather than 20 m because the client posts a 600-point downsample of the route, so
+ * on a curve the chord between samples can sit a few tens of metres off the carriageway.
+ */
+export const ON_ROUTE_OFFSET_M = 40;
+
+/** Expression: is this feature actually on the route, not merely near it? */
+export const IS_ON_ROUTE = [
+  '<=',
+  ['coalesce', ['get', 'offset_m'], 0],
+  ON_ROUTE_OFFSET_M,
+];
+
 export const ROUTE_STRUCT_LAYERS = {
   glow: 'struct-r-glow',
   casing: 'struct-r-casing',
@@ -885,20 +906,28 @@ export function ensureRouteStructureLayers(map) {
       beforeId,
     );
 
-  add(ROUTE_STRUCT_LAYERS.glow, {
+  add(
+    ROUTE_STRUCT_LAYERS.glow,
+    {
     'line-color': ['match', ['get', 'kind'], 'tunnel', TUNNEL_COLOR, BRIDGE_COLOR],
     // tweak: sized against the route-width lines below.
     'line-width': w(ROUTE_WIDTH * 1.9),
     // tweak: softer halo (was 0.3) to match the thinner, translucent lines.
     'line-opacity': significanceOpacity(0.18),
     'line-blur': 3,
-  });
-  add(ROUTE_STRUCT_LAYERS.casing, {
-    'line-color': '#0b1016',
-    // tweak: a touch wider than the line so it reads as an outline.
-    'line-width': w(ROUTE_WIDTH * 1.35),
-    'line-opacity': significanceOpacity(0.6),
-  });
+    },
+    IS_ON_ROUTE,
+  );
+  add(
+    ROUTE_STRUCT_LAYERS.casing,
+    {
+      'line-color': '#0b1016',
+      // tweak: a touch wider than the line so it reads as an outline.
+      'line-width': w(ROUTE_WIDTH * 1.35),
+      'line-opacity': significanceOpacity(0.6),
+    },
+    IS_ON_ROUTE,
+  );
   add(
     ROUTE_STRUCT_LAYERS.bridge,
     {
@@ -908,7 +937,7 @@ export function ensureRouteStructureLayers(map) {
       'line-width': w(ROUTE_WIDTH),
       'line-opacity': ON_ROUTE_OPACITY,
     },
-    ['==', ['get', 'kind'], 'bridge'],
+    ['all', ['==', ['get', 'kind'], 'bridge'], IS_ON_ROUTE],
   );
   add(
     ROUTE_STRUCT_LAYERS.tunnel,
@@ -919,7 +948,7 @@ export function ensureRouteStructureLayers(map) {
       'line-opacity': ON_ROUTE_OPACITY,
       'line-dasharray': [1.6, 1.1],
     },
-    ['==', ['get', 'kind'], 'tunnel'],
+    ['all', ['==', ['get', 'kind'], 'tunnel'], IS_ON_ROUTE],
   );
 }
 

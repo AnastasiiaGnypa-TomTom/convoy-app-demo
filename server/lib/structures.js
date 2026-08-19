@@ -364,7 +364,29 @@ export async function structuresAlongRoute(points, { fetchTile, corridorM = 1500
     const parts =
       f.geometry.type === 'MultiLineString' ? f.geometry.coordinates : [f.geometry.coordinates];
     const first = parts[0]?.[0];
-    if (first) f.properties = { ...f.properties, distance_m: Math.round(distanceAlong(first)) };
+
+    /*
+     * offset_m: the CLOSEST this structure comes to the route.
+     *
+     * The corridor filter above only asks whether a structure is within corridorM of the
+     * route, which for a 1.2 km corridor is "somewhere nearby" — in a canal city that is
+     * dozens of bridges the convoy never touches. Recording the actual offset lets the
+     * caller separate "the route crosses this" from "this is near the route", which is the
+     * difference between a clearance concern and background context.
+     */
+    let offset = Infinity;
+    for (const line of parts) {
+      for (const c of line) {
+        const d = metresToRoute(c, points);
+        if (d < offset) offset = d;
+      }
+    }
+
+    f.properties = {
+      ...f.properties,
+      distance_m: first ? Math.round(distanceAlong(first)) : null,
+      offset_m: Number.isFinite(offset) ? Math.round(offset) : null,
+    };
   }
 
   return {
