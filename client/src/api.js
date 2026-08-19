@@ -126,10 +126,15 @@ export async function requestChangeDetection({ aoi, from, to }, { signal } = {})
 
 /** Constraint-aware route + alternatives for a vehicle profile. */
 
-export function requestRoute({ start, end, profileId, custom, maxAlternatives = 3 }, { signal } = {}) {
+export function requestRoute(
+  { start, end, profileId, custom, maxAlternatives = 3, avoid },
+  { signal } = {},
+) {
   return request('/api/route', {
     method: 'POST',
     signal,
-    body: { start, end, profileId, custom, maxAlternatives },
+    // task 7: `avoid` is validated server-side against the verified list, so an
+    // unsupported value here is dropped rather than failing the whole route.
+    body: { start, end, profileId, custom, maxAlternatives, avoid },
   });
 }

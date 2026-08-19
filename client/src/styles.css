@@ -2583,3 +2583,24 @@ h2 {
   /* Shorter on a phone, where map height is scarcer than chart detail. */
   .elev-strip-body { height: 6.5rem; }
 }
+
+/* ───────────── task 7: avoidance toggles + route makeup ───────────── */
+.avoid-block, .comp-block { margin-top: 0.6rem; font-size: 0.78rem; }
+.avoid-block > summary, .comp-block > summary {
+  cursor: pointer;
+  color: var(--text-dim);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+}
+.avoid-list, .comp-list { list-style: none; margin: 0.4rem 0 0; padding: 0; display: grid; gap: 0.22rem; }
+.avoid-row { display: flex; align-items: baseline; gap: 0.4rem; }
+/* Disabled reads as unavailable, not merely unchecked. */
+.avoid-row-off { opacity: 0.55; cursor: not-allowed; }
+.avoid-why { display: block; font-style: normal; font-size: 0.66rem; color: var(--warn); }
+.comp-row { display: grid; grid-template-columns: 6.2rem 1fr auto; gap: 0.4rem; align-items: center; }
+.comp-label { color: var(--text-dim); font-size: 0.72rem; }
+.comp-bar { height: 0.4rem; background: var(--surface-2); border-radius: 999px; overflow: hidden; }
+.comp-bar > span { display: block; height: 100%; background: var(--accent); }
+.comp-val { font-size: 0.7rem; font-variant-numeric: tabular-nums; color: var(--text); white-space: nowrap; }
+.comp-note { margin: 0.35rem 0 0; font-size: 0.66rem; color: var(--text-dim); opacity: 0.85; }

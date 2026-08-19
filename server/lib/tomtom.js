@@ -44,7 +44,19 @@ export class VendorError extends Error {
 export function tomtomUrl(path, params = {}) {
   const url = new URL(path.startsWith('http') ? path : `${BASE}${path}`);
   for (const [k, v] of Object.entries(params)) {
-    if (v !== undefined && v !== null && v !== '') url.searchParams.set(k, String(v));
+    if (v === undefined || v === null || v === '') continue;
+    /*
+     * task 7: arrays become REPEATED parameters, not a comma-joined string. TomTom
+     * rejects `sectionType=tunnel,motorway` with "Invalid section type value" and the
+     * same is true of avoid — the only accepted form is the key repeated.
+     */
+    if (Array.isArray(v)) {
+      for (const item of v) {
+        if (item !== undefined && item !== null && item !== '') url.searchParams.append(k, String(item));
+      }
+      continue;
+    }
+    url.searchParams.set(k, String(v));
   }
   url.searchParams.set('key', config.tomtomKey);
   return url.toString();

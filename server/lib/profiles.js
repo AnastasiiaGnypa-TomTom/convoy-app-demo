@@ -164,3 +164,54 @@ export function publicProfiles() {
     customLimits: CUSTOM_LIMITS,
   };
 }
+
+/* ─────────────────────────── task 7: road-type avoidance ─────────────────── */
+
+/**
+ * TomTom `avoid` values, verified against the live API rather than the docs.
+ *
+ * Each was called on a real route; the `supported` flag records the HTTP result, and
+ * `effect` records whether the returned route actually changed on a corridor where the
+ * feature is unavoidable (Göschenen → Airolo, where the Gotthard road tunnel is the
+ * direct way):
+ *
+ *   unpavedRoads     200
+ *   tollRoads        200   route changed 35 → 37 min
+ *   ferries          200
+ *   motorways        200
+ *   carpools         200
+ *   borderCrossings  200
+ *   tunnels          200   route changed 35 → 45 min
+ *   lowEmissionZones 200
+ *   alreadyUsedRoads 200   (only meaningful with waypoints; not exposed)
+ *   bridges          400   "Invalid avoid value: [bridges]"
+ *
+ * Note "tunnels" IS supported and does work, which is worth stating because it is easy
+ * to assume otherwise given `avoid=bridges` is rejected. Bridges is the one a convoy
+ * planner would most want, and it does not exist — shown in the UI as disabled rather
+ * than silently missing, so nobody assumes a bridge-free route was calculated.
+ */
+export const AVOID_OPTIONS = [
+  { id: 'tollRoads', label: 'Toll roads', supported: true },
+  { id: 'motorways', label: 'Motorways', supported: true },
+  { id: 'ferries', label: 'Ferries', supported: true },
+  { id: 'unpavedRoads', label: 'Unpaved roads', supported: true },
+  { id: 'tunnels', label: 'Tunnels', supported: true },
+  { id: 'borderCrossings', label: 'Border crossings', supported: true },
+  { id: 'lowEmissionZones', label: 'Low-emission zones', supported: true },
+  { id: 'carpools', label: 'Carpool lanes', supported: true },
+  {
+    id: 'bridges',
+    label: 'Bridges',
+    supported: false,
+    reason: 'Not supported by routing — TomTom rejects avoid=bridges.',
+  },
+];
+
+const SUPPORTED_AVOID = new Set(AVOID_OPTIONS.filter((o) => o.supported).map((o) => o.id));
+
+/** Keep only values TomTom will accept, so a stale client cannot 400 the whole route. */
+export function sanitiseAvoid(list) {
+  if (!Array.isArray(list)) return [];
+  return [...new Set(list.filter((v) => SUPPORTED_AVOID.has(v)))];
+}

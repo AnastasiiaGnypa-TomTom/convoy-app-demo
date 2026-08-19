@@ -56,6 +56,11 @@ export default function Sidebar({
   routes,
   selectedIndex,
   routeStructures,
+  // task 7
+  avoidOptions,
+  avoid,
+  onAvoidChange,
+  composition,
   onSelectStructure,
   highlightedStructureKey,
   routeLoading,
@@ -313,6 +318,68 @@ export default function Sidebar({
                     })}
                   </ul>
                 </div>
+              )}
+
+              {/* task 7: avoidance toggles + what the route is actually made of. */}
+              {avoidOptions?.length > 0 && (
+                <details className="avoid-block">
+                  <summary>Avoid road types</summary>
+                  <ul className="avoid-list">
+                    {avoidOptions.map((o) => (
+                      <li key={o.id}>
+                        <label className={`avoid-row ${o.supported ? '' : 'avoid-row-off'}`}>
+                          <input
+                            type="checkbox"
+                            checked={Boolean(avoid?.includes(o.id))}
+                            disabled={!o.supported}
+                            onChange={() =>
+                              onAvoidChange?.(
+                                avoid?.includes(o.id)
+                                  ? avoid.filter((x) => x !== o.id)
+                                  : [...(avoid || []), o.id],
+                              )
+                            }
+                          />
+                          <span>{o.label}</span>
+                          {/*
+                            * Shown but disabled, with the reason. Hiding it would leave a
+                            * planner assuming a bridge-free route is possible; faking it
+                            * would be worse.
+                            */}
+                          {!o.supported && <em className="avoid-why">{o.reason}</em>}
+                        </label>
+                      </li>
+                    ))}
+                  </ul>
+                </details>
+              )}
+
+              {composition?.types && (
+                <details className="comp-block">
+                  <summary>
+                    Route makeup
+                    {composition.types[0] ? ` · ${composition.types[0].label} ${composition.types[0].percent}%` : ''}
+                  </summary>
+                  <ul className="comp-list">
+                    {composition.types.map((t) => (
+                      <li key={t.type} className="comp-row">
+                        <span className="comp-label">{t.label}</span>
+                        <span className="comp-bar" aria-hidden="true">
+                          <span style={{ width: `${Math.min(100, t.percent)}%` }} />
+                        </span>
+                        <span className="comp-val">
+                          {t.percent}% · {(t.meters / 1000).toFixed(1)} km
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                  {composition.unreported?.length > 0 && (
+                    <p className="comp-note">
+                      None on this route: {composition.unreported.join(', ')}.
+                    </p>
+                  )}
+                  <p className="comp-note">{composition.note}</p>
+                </details>
               )}
 
               {/*

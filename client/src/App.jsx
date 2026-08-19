@@ -100,6 +100,8 @@ export default function App() {
 
   const [routeData, setRouteData] = useState(null);
   const [selectedIndex, setSelectedIndex] = useState(0);
+  // task 7: road types to avoid. Empty by default, so routing is unchanged until asked.
+  const [avoid, setAvoid] = useState([]);
   const [routeLoading, setRouteLoading] = useState(false);
   const [mapCenter, setMapCenter] = useState(null);
   const [panelOpen, setPanelOpen] = useState(true);
@@ -389,7 +391,13 @@ export default function App() {
     setError(null);
 
     requestRoute(
-      { start, end, profileId, custom: profileId === 'custom' ? custom : undefined },
+      {
+        start,
+        end,
+        profileId,
+        custom: profileId === 'custom' ? custom : undefined,
+        avoid, // task 7
+      },
       { signal: ctl.signal },
     )
       .then((data) => {
@@ -407,7 +415,7 @@ export default function App() {
       });
 
     return () => ctl.abort();
-  }, [start, end, profileId, custom]);
+  }, [start, end, profileId, custom, avoid]); // task 7: avoid re-routes
 
   /* --------------------------------------------------- traffic incidents */
   /*
@@ -1399,6 +1407,14 @@ export default function App() {
             profileId={profileId}
             custom={custom}
             routes={routeData?.routes}
+            /* task 7 */
+            avoidOptions={routeData?.avoidOptions || null}
+            avoid={avoid}
+            onAvoidChange={setAvoid}
+            composition={
+              routeData?.routes?.features?.find((f) => f.properties.index === (selectedIndex ?? 0))
+                ?.properties?.composition || null
+            }
             routeStructures={routeStructureList}
             onSelectStructure={handleSelectStructure}
             highlightedStructureKey={highlightedStructure?.key || null}

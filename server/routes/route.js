@@ -10,7 +10,13 @@
 
 import { Router } from 'express';
 import { createCache } from '../lib/cache.js';
-import { ROUTING_ENDPOINT, publicProfiles, resolveConstraints } from '../lib/profiles.js';
+import {
+  AVOID_OPTIONS,
+  ROUTING_ENDPOINT,
+  publicProfiles,
+  resolveConstraints,
+  sanitiseAvoid,
+} from '../lib/profiles.js';
 import { VendorError, tomtomJson, tomtomUrl } from '../lib/tomtom.js';
 
 export const routeRouter = Router();
@@ -75,6 +81,77 @@ function maneuvers(route) {
   }));
 }
 
+/* ─────────────────── task 7: road-type composition ──────────────────────── */
+
+/** Metres between two lon/lat pairs, planar approximation (fine at section scale). */
+function segMetres(a, b) {
+  const mPerLon = Math.cos((a[1] * Math.PI) / 180) * 111320;
+  return Math.hypot((b[0] - a[0]) * mPerLon, (b[1] - a[1]) * 110540);
+}
+
+/**
+ * How much of the route runs on each road type.
+ *
+ * Derived only from the sections TomTom returned, measured against the route's own
+ * geometry — nothing is estimated. Two honesty points baked in:
+ *
+ *  - Types OVERLAP. A stretch can be URBAN and TUNNEL and LOW_EMISSION_ZONE at once, so
+ *    these are per-type distances, not slices of a pie, and they can sum to more than
+ *    the route length. The UI says so rather than normalising the numbers into
+ *    percentages that would look tidy and be wrong.
+ *  - Absence is not zero. TomTom only returns sections for types present on the route,
+ *    so a type with no sections is reported as "none on this route" — which is a real
+ *    answer — while `unreported` lists the types we asked for and heard nothing about.
+ */
+function composition(route, coordinates) {
+  const TYPES = {
+    MOTORWAY: 'Motorway',
+    TOLL_ROAD: 'Toll road',
+    TUNNEL: 'Tunnel',
+    URBAN: 'Urban',
+    FERRY: 'Ferry',
+    UNPAVED: 'Unpaved',
+    CAR_TRAIN: 'Car train',
+    CARPOOL: 'Carpool lane',
+    LOW_EMISSION_ZONE: 'Low-emission zone',
+  };
+
+  // Cumulative distance along the geometry, so a section is one subtraction.
+  const cum = [0];
+  for (let i = 1; i < coordinates.length; i++) {
+    cum.push(cum[i - 1] + segMetres(coordinates[i - 1], coordinates[i]));
+  }
+  const total = cum[cum.length - 1] || 0;
+
+  const metres = {};
+  for (const sec of route.sections || []) {
+    const type = sec.sectionType;
+    if (!TYPES[type]) continue; // TRAFFIC and anything unknown are not road types
+    const a = Math.max(0, Math.min(cum.length - 1, Number(sec.startPointIndex) || 0));
+    const b = Math.max(0, Math.min(cum.length - 1, Number(sec.endPointIndex) || 0));
+    if (b <= a) continue;
+    metres[type] = (metres[type] || 0) + (cum[b] - cum[a]);
+  }
+
+  const present = Object.entries(metres)
+    .map(([type, m]) => ({
+      type,
+      label: TYPES[type],
+      meters: Math.round(m),
+      // Share of the route, which may exceed 100% across types because they overlap.
+      percent: total > 0 ? Math.round((m / total) * 1000) / 10 : null,
+    }))
+    .sort((x, y) => y.meters - x.meters);
+
+  return {
+    totalMeters: Math.round(total),
+    types: present,
+    unreported: Object.keys(TYPES).filter((t) => !metres[t]).map((t) => TYPES[t]),
+    overlaps: true,
+    note: 'Distances come from TomTom route sections. Types can overlap, so they may total more than the route length.',
+  };
+}
+
 /**
  * Traffic sections come back as indices into the flattened point array. Kept on
  * the feature so Step 5 can render congestion without a second vendor call.
@@ -92,7 +169,14 @@ function trafficSections(route) {
 }
 
 routeRouter.post('/', async (req, res, next) => {
-  const { start, end, profileId = 'light-vehicle', custom, maxAlternatives = 3 } = req.body || {};
+  const {
+    start,
+    end,
+    profileId = 'light-vehicle',
+    custom,
+    maxAlternatives = 3,
+    avoid, // task 7
+  } = req.body || {};
 
   if (!validPoint(start) || !validPoint(end)) {
     return res.status(400).json({ error: 'start and end must each be {lat, lon}' });
@@ -117,7 +201,28 @@ routeRouter.post('/', async (req, res, next) => {
     traffic: 'true',
     routeType: 'fastest',
     computeTravelTimeFor: 'all',
-    sectionType: 'traffic',
+    /*
+     * task 7: road-type sections, requested as REPEATED sectionType params (comma-joined
+     * is rejected). These are what the composition readout is derived from — nothing is
+     * inferred or estimated. TRAFFIC stays in the list because the congestion overlay
+     * needs it; it is excluded from the composition, being a delay rather than a road
+     * type. `ferry`, `unpaved`, `carTrain` and `carpool` are requested too and simply
+     * return no sections when the route has none.
+     */
+    sectionType: [
+      'traffic',
+      'motorway',
+      'tollRoad',
+      'tunnel',
+      'urban',
+      'ferry',
+      'unpaved',
+      'carTrain',
+      'carpool',
+      'lowEmissionZone',
+    ],
+    // task 7: only values verified against the live API (see AVOID_OPTIONS).
+    ...(sanitiseAvoid(avoid).length ? { avoid: sanitiseAvoid(avoid) } : {}),
     /*
      * Turn-by-turn guidance.
      *
@@ -164,6 +269,7 @@ routeRouter.post('/', async (req, res, next) => {
           departureTime: s.departureTime ?? null,
           arrivalTime: s.arrivalTime ?? null,
           trafficSections: trafficSections(r),
+          composition: composition(r, coordinates), // task 7
           maneuvers: maneuvers(r),
           maneuverCount: (r.guidance?.instructions || []).length,
         },
@@ -178,6 +284,9 @@ routeRouter.post('/', async (req, res, next) => {
     }
 
     const payload = {
+      // task 7: the toggle catalogue, so the UI cannot offer a value the API rejects.
+      avoidOptions: AVOID_OPTIONS,
+      avoidApplied: sanitiseAvoid(avoid),
       profile: { id: profileId, label, spec, travelMode: constraints.travelMode },
       vendor: ROUTING_ENDPOINT.vendor,
       routeCount: routes.length,
