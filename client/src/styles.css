@@ -1213,13 +1213,11 @@ h2 {
   min-height: 0;
 }
 
-/* Navigation takes the whole viewport — no header, no side panel. */
+/* Mission planning hides the header but KEEPS the side panel (see the rule further
+   down). Revert by restoring `grid-template-columns: 1fr` on .app-mode-navigate
+   .app-body in both places. */
 .app-mode-navigate {
   grid-template-rows: 1fr;
-}
-
-.app-mode-navigate .app-body {
-  grid-template-columns: 1fr;
 }
 
 /* ---------------------------------------------------------------- search bar */
@@ -1967,9 +1965,20 @@ h2 {
   grid-template-columns: 3rem 1fr;
 }
 
-/* Navigation is deliberately full-screen: no panel column at all. */
+/*
+ * Mission planning keeps the panel column.
+ *
+ * It used to collapse to `1fr` — full-screen map, no panel — which meant the POI toggles,
+ * the elevation profile and the bridge/tunnel list all vanished exactly when someone
+ * watching the fly-through would want to look at them. Slightly narrower than in
+ * planning, so the map still dominates while the animation plays.
+ */
 .app-mode-navigate .app-body {
-  grid-template-columns: 1fr;
+  grid-template-columns: 17rem 1fr;
+}
+
+.app-mode-navigate.app-rail .app-body {
+  grid-template-columns: 3rem 1fr;
 }
 
 .sidebar {

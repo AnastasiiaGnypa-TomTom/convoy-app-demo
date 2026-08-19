@@ -1343,9 +1343,14 @@ export default function App() {
         {/*
           * ONE panel surface. Everything that used to be a floating sheet is a
           * section in here, so nothing can overlap or hide anything else.
-          * Hidden only during navigation, which is a deliberate full-screen mode.
+          *
+          * Kept mounted during mission planning too. Hiding it made the animation a
+          * closed box: you could not check what infrastructure is coming up, toggle a POI
+          * layer, or look at the climb ahead while it played — which is most of what the
+          * fly-through is for in a briefing. Mounted rather than duplicated, so the
+          * sections stay one implementation and keep updating live.
           */}
-        {!navMode && (
+        {(
           <Sidebar
             collapsed={sidebarCollapsed}
             onToggleCollapsed={() => setSidebarCollapsed((v) => !v)}
@@ -1558,7 +1563,11 @@ export default function App() {
               captureDate={captureDate}
               poiCategories={poiLayerDefs?.filter((l) => l.hasSource)}
               poiData={poiData}
-              poiOn={poiOn && !navMode}
+              /*
+               * Was `poiOn && !navMode`: POIs were force-hidden during the animation, so
+               * the toggle appeared dead. The toggle is now the only thing that decides.
+               */
+              poiOn={poiOn}
               highlightedPoiLayer={highlightedPoiLayer}
               highlightedStructure={highlightedStructure?.structure || null}
               goTo={goTo}
@@ -1635,7 +1644,7 @@ export default function App() {
             </div>
           )}
 
-          {poiOn && poiLoading && !navMode && (
+          {poiOn && poiLoading && (
             <div className="map-loading" role="status">
               <span className="mini-spinner" aria-hidden="true" />
               Loading POIs…
