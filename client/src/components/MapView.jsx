@@ -29,6 +29,7 @@ import {
   setPoiVisible,
 } from '../lib/poiLayers.js';
 import { createVehiclePuckElement } from '../lib/vehicleIcons.js';
+import CameraControls from './CameraControls.jsx'; // ux-camera
 import {
   createVehicleMarker,
   ensureNavLayers,
@@ -843,9 +844,13 @@ export default function MapView({
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !ready) return;
-    if (buildings3D && is3D) enableBuildings3D(map);
+    // ux-fix: buildings must NOT extrude while satellite imagery is on, or the
+    // untextured blocks stack on the photographed rooftops ("doubled/ghost
+    // building" artifact). Extrusions are a Map-mode-only look, as the comment
+    // above intends.
+    if (buildings3D && is3D && !imageryOn) enableBuildings3D(map);
     else disableBuildings3D(map);
-  }, [buildings3D, is3D, ready]);
+  }, [buildings3D, is3D, imageryOn, ready]);
 
   /* --------------------------------------------------------- navigation */
   const vehicleMarkerRef = useRef(null);
@@ -1008,10 +1013,27 @@ export default function MapView({
   }, [picking]);
 
   return (
-    <div
-      ref={containerRef}
-      className={`map-canvas ${picking ? 'map-picking' : ''}`}
-      aria-label="Convoy route map"
-    />
+    <>
+      <div
+        ref={containerRef}
+        className={`map-canvas ${picking ? 'map-picking' : ''}`}
+        aria-label="Convoy route map"
+      />
+      {/*
+        * ux-camera: rendered here because this is where the map instance lives, and the
+        * controls drive it directly — a drag emits a value per pointer event, and routing
+        * those through React state makes the rotation feel heavy.
+        *
+        * Hidden while the animation plays: the nav camera owns pitch and bearing then, so
+        * the widget would be fighting it and showing values it cannot hold.
+        */}
+      {ready && (
+        <CameraControls
+          map={mapRef.current}
+          maxPitch={config?.map?.maxPitch ?? 70}
+          hidden={navigating}
+        />
+      )}
+    </>
   );
 }

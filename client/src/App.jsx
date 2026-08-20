@@ -135,6 +135,8 @@ export default function App() {
     setOpenPanels((prev) => ({ ...prev, [id]: !prev[id] }));
   }, []);
 
+  /** ux-camera: the 2D/3D setting to restore when the animation ends. */
+  const viewBeforePlanningRef = useRef(null);
   const [printing, setPrinting] = useState(false);
   const [printSnapshot, setPrintSnapshot] = useState(null);
   const [routeLoading, setRouteLoading] = useState(false);
@@ -1277,6 +1279,21 @@ export default function App() {
     setPaused(false);
     setFollowCamera(true);
 
+    /*
+     * ux-camera: the animation always opens as a 3D chase view.
+     *
+     * Two things had to be forced. The camera mode is persisted in localStorage, so
+     * anyone who once chose Overhead got a flat top-down fly-through for ever after —
+     * the default now applies to every run, and the in-flight toggle still switches it.
+     *
+     * And terrain is only attached while the 3D view is on, so a run started in 2D was
+     * pitched over FLAT ground: correct camera, no relief. The previous view is restored
+     * on exit, so this borrows the setting rather than changing it.
+     */
+    setCameraMode(CAMERA_MODES.FOLLOW);
+    viewBeforePlanningRef.current = view;
+    setView('3d');
+
     if (basemap === 'satellite') {
       setPrefetch({ warming: true });
       try {
@@ -1308,6 +1325,11 @@ export default function App() {
   ]);
 
   const endNavigation = useCallback(() => {
+    // ux-camera: hand the view setting back exactly as it was found.
+    if (viewBeforePlanningRef.current) {
+      setView(viewBeforePlanningRef.current);
+      viewBeforePlanningRef.current = null;
+    }
     setMode('browse');
     setFollowCamera(true);
     setPaused(false);
