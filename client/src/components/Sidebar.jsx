@@ -292,9 +292,22 @@ export default function Sidebar({
             </p>
           )}
 
-          {!routeLoading && features.length > 0 && (
-            <>
-              <ul className="route-cards">
+          {/*
+            * ux: NOT gated on routeLoading.
+            *
+            * This wrapper used to unmount the whole block — route cards, structures list
+            * AND every option panel — for the duration of a recompute. Since changing an
+            * option IS what triggers the recompute, the menu you had just clicked
+            * disappeared from under the cursor and came back a few seconds later. The
+            * open state survived (it lives in App), so it looked like a flicker rather
+            * than a reset, but mid-typing it destroyed the field being typed into.
+            *
+            * The previous results stay on screen while the new ones are computed, marked
+            * as updating, which is also just better: stale numbers beat no numbers.
+            */}
+          {features.length > 0 && (
+            <div className="dir-block">
+              <ul className={`route-cards ${routeLoading ? 'dir-updating' : ''}`}>
                 {features.map((f) => {
                   const p = f.properties;
                   const isSelected = p.index === selectedIndex;
@@ -556,7 +569,7 @@ export default function Sidebar({
                   Print / export plan
                 </button>
               )}
-            </>
+            </div>
           )}
         </Section>
 

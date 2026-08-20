@@ -1810,17 +1810,26 @@ h2 {
   font-variant-numeric: tabular-nums;
 }
 
+.elev-chart-box { width: 100%; height: 5.5rem; margin-top: 0.35rem; }
 .elev-chart {
   width: 100%;
-  height: 5.5rem;
-  margin-top: 0.35rem;
+  height: 100%;
   display: block;
 }
 
 .elev-area { fill: color-mix(in srgb, var(--accent) 22%, transparent); }
 .elev-line { fill: none; stroke: var(--accent); stroke-width: 1.6; }
 .elev-steep { fill: color-mix(in srgb, #f59e0b 26%, transparent); }
-.elev-axis { fill: var(--text-dim); font-size: 8px; }
+/*
+ * ux: normal weight, explicitly. They also no longer get stretched horizontally now the
+ * viewBox matches the container in pixels, which is what actually made them look fat.
+ */
+.elev-axis {
+  fill: var(--text-dim);
+  font-size: 10px;
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+}
 
 .elev-stats {
   display: flex;
@@ -2585,12 +2594,16 @@ h2 {
  * "Elevation profile" — two identical titles a few pixels apart is just noise.
  */
 .elev-strip-body .section-head { display: none; }
-.elev-strip-body .elev-chart {
+.elev-strip-body .elev-chart-box {
   flex: 1;
   min-height: 0;
-  height: auto;
   width: 100%;
   margin-top: 0.15rem;
+}
+.elev-strip-body .elev-chart {
+  display: block;
+  width: 100%;
+  height: 100%;
 }
 /*
  * The stats and caveats share the strip with the chart, so they are compacted here to
@@ -2601,7 +2614,7 @@ h2 {
 .elev-strip-body .elev-caveat { padding: 0 0.6rem; font-size: 0.66rem; margin: 0.15rem 0 0; }
 .elev-strip-body .elev-caveat { display: none; }
 /* Stretched by preserveAspectRatio="none", so compensate the stroke and text. */
-.elev-strip-body .elev-line { stroke-width: 0.9; vector-effect: non-scaling-stroke; }
+.elev-strip-body .elev-line { stroke-width: 1.6; }
 .elev-strip-body .elev-axis { font-size: 7px; }
 
 /* ux-elev: the grab edge. */
@@ -2879,3 +2892,7 @@ h2 {
   .cam-controls { bottom: 4.5rem; }
   .cam-tilt input[type='range'] { width: 3.4rem; }
 }
+
+/* ux: previous results stay visible while a recompute runs, just dimmed. */
+.dir-block { display: contents; }
+.dir-updating { opacity: 0.75; transition: opacity 160ms ease; }

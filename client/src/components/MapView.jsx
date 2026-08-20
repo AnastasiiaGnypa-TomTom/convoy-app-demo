@@ -359,10 +359,21 @@ export default function MapView({
     setRouteData(map, fc);
     setSelectedRoute(map, selectedIndex ?? 0);
 
-    // Refit only when the geometry itself is new.
-    const key = fc?.features?.length
-      ? `${fc.features.length}:${fc.features[0].geometry.coordinates.length}:${JSON.stringify(fc.features[0].geometry.coordinates[0])}`
-      : null;
+    /*
+     * ux: refit only when the ENDPOINTS change, not when the geometry does.
+     *
+     * The key used to include the point count and the first coordinate, so any recompute
+     * that altered the shape re-framed the camera — and options DO alter the shape.
+     * Toggling "avoid motorways" or nudging the departure time therefore yanked the view
+     * back to the whole route mid-adjustment, which is the "returns me to the front"
+     * jump. Origin and destination are the only things that should re-aim the camera:
+     * a different route between the same two points is still the same area you are
+     * looking at.
+     */
+    const key =
+      fc?.features?.length && start && end
+        ? `${Number(start.lat).toFixed(5)},${Number(start.lon).toFixed(5)}|${Number(end.lat).toFixed(5)},${Number(end.lon).toFixed(5)}`
+        : null;
     /*
      * Never re-frame while navigating. Pressing "Go" sets the destination, which
      * produces new geometry and used to fire a fitBounds to the whole route at the
@@ -375,7 +386,7 @@ export default function MapView({
       lastFitKey.current = key;
     }
     if (!key) lastFitKey.current = null;
-  }, [routeData, selectedIndex, ready, navigating]);
+  }, [routeData, selectedIndex, ready, navigating, start, end]); // ux: endpoints drive the fit
 
   /* --------------------------------------------------------- overlay setup */
   // Added once the sources are known. Both start hidden; the effects below

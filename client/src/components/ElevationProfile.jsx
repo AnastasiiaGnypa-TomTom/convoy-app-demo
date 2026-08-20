@@ -1,3 +1,4 @@
+import { useEffect, useRef, useState } from 'react';
 import { formatDistance } from '../lib/format.js';
 
 /**
@@ -11,6 +12,23 @@ import { formatDistance } from '../lib/format.js';
  * map, so the two read as one thing.
  */
 export default function ElevationProfile({ profile, vehicleLabel, gradeLimit, unavailableReason }) {
+  const boxRef = useRef(null);
+  const [size, setSize] = useState({ W: 300, H: 90 });
+
+  useEffect(() => {
+    const el = boxRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(([entry]) => {
+      const r = entry.contentRect;
+      // Guard against a zero-size box while collapsed, which would divide by zero.
+      if (r.width > 20 && r.height > 20) {
+        setSize({ W: Math.round(r.width), H: Math.round(r.height) });
+      }
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
   if (unavailableReason) {
     return (
       <div className="panel-section">
@@ -32,9 +50,22 @@ export default function ElevationProfile({ profile, vehicleLabel, gradeLimit, un
     );
   }
 
-  const W = 300;
-  const H = 90;
-  const pad = { l: 2, r: 2, t: 6, b: 12 };
+  /*
+   * ux: the viewBox matches the container's real pixel size.
+   *
+   * It used to be a fixed 300x90 box. With the default preserveAspectRatio that
+   * letterboxed the chart inside the wide strip (dead space either side); with
+   * preserveAspectRatio="none" it filled the width but stretched everything ~4x
+   * horizontally, which is what made the axis numbers look fat and bold — they were
+   * literally scaled wide, not heavy.
+   *
+   * Measuring the box and drawing in its own units fixes both at once: the chart fills
+   * the space and text renders at true proportions. A ResizeObserver keeps it correct
+   * through the height drag and any window resize.
+   */
+  const { W, H } = size;
+  // Padding in px, since the viewBox is now in px. Bottom leaves room for the labels.
+  const pad = { l: 6, r: 6, t: 8, b: Math.min(18, Math.max(12, H * 0.16)) };
   const { samples, minElevation, maxElevation, totalDistance } = profile;
 
   // Never let a flat route collapse to a zero-height chart.
@@ -66,10 +97,10 @@ export default function ElevationProfile({ profile, vehicleLabel, gradeLimit, un
         * preserve, and the axis labels are drawn in the same user units so they stretch
         * with it.
         */}
+      <div className="elev-chart-box" ref={boxRef}>
       <svg
         className="elev-chart"
         viewBox={`0 0 ${W} ${H}`}
-        preserveAspectRatio="none"
         role="img"
         aria-label="Route elevation profile"
       >
@@ -93,6 +124,7 @@ export default function ElevationProfile({ profile, vehicleLabel, gradeLimit, un
           {formatDistance(totalDistance)}
         </text>
       </svg>
+      </div>
 
       <div className="elev-stats">
         <span className="elev-stat">
