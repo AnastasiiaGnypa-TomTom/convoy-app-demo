@@ -26,6 +26,7 @@ import {
   fetchTrafficMeta,
   requestChangeDetection,
   requestRoute,
+  fetchTimeProfile, // ux-insight
   reverseGeocode,
 } from './api.js';
 import { isGeolocationAvailable, locateUser } from './lib/locate.js';
@@ -139,6 +140,9 @@ export default function App() {
   const viewBeforePlanningRef = useRef(null);
   /** ux-highlight: which road type is traced on the map, if any. */
   const [highlightedRoadType, setHighlightedRoadType] = useState(null);
+  /** ux-insight: travel time by departure hour, for the Departure time panel. */
+  const [timeProfile, setTimeProfile] = useState(null);
+  const [timeProfileLoading, setTimeProfileLoading] = useState(false);
   const [printing, setPrinting] = useState(false);
   const [printSnapshot, setPrintSnapshot] = useState(null);
   const [routeLoading, setRouteLoading] = useState(false);
@@ -1038,6 +1042,50 @@ export default function App() {
    * Carries the section ranges through rather than just the type name, so the map draws
    * the exact stretches the percentage was measured from.
    */
+  /*
+   * ux-fit: "Show whole route" — frame the route on demand.
+   *
+   * Detection can always miss a path; a button cannot. It reuses the same fitBounds
+   * request the POI locator uses, so the animation is identical.
+   */
+  /*
+   * ux-insight: fetch the hour-by-hour comparison, but only once the Departure time panel
+   * is open.
+   *
+   * It costs one vendor call per sampled hour, so doing it for every route would be six
+   * requests nobody asked for. Keyed on the things that change the answer — endpoints,
+   * vehicle, avoidance — and not on the chosen time itself, since the profile IS the
+   * comparison across times.
+   */
+  useEffect(() => {
+    if (!openPanels?.depart || !start || !end) return;
+    const ctl = new AbortController();
+    setTimeProfileLoading(true);
+    fetchTimeProfile({ start, end, profileId, custom: profileId === 'custom' ? custom : undefined, avoid }, { signal: ctl.signal })
+      .then(setTimeProfile)
+      .catch((err) => {
+        if (err.name !== 'AbortError') console.warn('[time-profile]', err.message);
+      })
+      .finally(() => setTimeProfileLoading(false));
+    return () => ctl.abort();
+  }, [openPanels?.depart, start, end, profileId, custom, avoid]);
+
+  const showWholeRoute = useCallback(() => {
+    const coords = selectedRouteCoords;
+    if (!coords?.length) return;
+    let w = 180;
+    let so = 90;
+    let e = -180;
+    let n = -90;
+    for (const [lon, lat] of coords) {
+      if (lon < w) w = lon;
+      if (lon > e) e = lon;
+      if (lat < so) so = lat;
+      if (lat > n) n = lat;
+    }
+    setFitBounds({ bounds: [w, so, e, n], token: Date.now() });
+  }, [selectedRouteCoords]);
+
   const handleSelectRoadType = useCallback((entry) => {
     setHighlightedRoadType((prev) =>
       prev?.type === entry?.type ? null : { type: entry.type, sections: entry.sections || [] },
@@ -1657,6 +1705,9 @@ export default function App() {
             onTimeModeChange={setTimeMode}
             onTimeValueChange={setTimeValue}
             timing={routeData?.timing || null}
+            /* ux-insight */
+            timeProfile={timeProfile}
+            timeProfileLoading={timeProfileLoading}
             avoid={avoid}
             onAvoidChange={setAvoid}
             composition={
@@ -1672,6 +1723,7 @@ export default function App() {
             onSelectStructure={handleSelectStructure}
             /* ux-highlight */
             onSelectRoadType={handleSelectRoadType}
+            onShowWholeRoute={showWholeRoute} /* ux-fit */
             highlightedRoadTypeId={highlightedRoadType?.type || null}
             onSelectRoundabout={handleSelectRoundabout}
             onPrint={openPrintView} /* task 10a */

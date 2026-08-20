@@ -383,7 +383,32 @@ export default function MapView({
      * produces new geometry and used to fire a fitBounds to the whole route at the
      * exact moment the nav camera was moving in — the reported zoom-out-then-snap.
      */
-    if (key && key !== lastFitKey.current && !navigating) {
+    /*
+     * ux-fit: a safety net alongside the endpoint key.
+     *
+     * The key handles the normal case, but it cannot catch every path that produces a
+     * new route — a place picked from search, for instance, goes through a different
+     * branch that deliberately does not move the camera while a route exists. The
+     * symptom is the worst kind: a route is drawn hundreds of kilometres away and the
+     * map stays where it was, so the app looks broken.
+     *
+     * So: also fit when the route is plainly not in front of the user. 60 km from the
+     * current centre is far beyond any view the fit itself would produce, which is why
+     * this cannot fight the key-based fit or re-trigger on an options change.
+     */
+    let farAway = false;
+    if (fc?.features?.length && !navigating) {
+      const coords = fc.features[0].geometry.coordinates;
+      const mid = coords[Math.floor(coords.length / 2)];
+      if (mid) {
+        const c = map.getCenter();
+        const mPerLon = Math.cos((c.lat * Math.PI) / 180) * 111320;
+        const dist = Math.hypot((mid[0] - c.lng) * mPerLon, (mid[1] - c.lat) * 110540);
+        farAway = dist > 60_000;
+      }
+    }
+
+    if ((farAway || (key && key !== lastFitKey.current)) && !navigating) {
       lastFitKey.current = key;
       fitToRoute(map, fc);
     } else if (key) {

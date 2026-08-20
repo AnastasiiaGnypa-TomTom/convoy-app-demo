@@ -410,3 +410,103 @@ routeRouter.post('/', async (req, res, next) => {
     return next(err);
   }
 });
+
+/* ─────────────── ux-insight: travel time by departure hour ───────────────── */
+
+const timeProfileCache = createCache({ ttlMs: 10 * 60_000 });
+
+/** Hours sampled across the day. Six keeps the vendor cost sane and still shows the shape. */
+const PROFILE_HOURS = [4, 7, 10, 13, 16, 19];
+
+/**
+ * How long the same journey takes at different departure hours.
+ *
+ * This exists because TomTom gives no delay figure for a FUTURE departure. Measured:
+ * with departAt set, trafficDelayInSeconds, noTrafficTravelTimeSeconds and
+ * historicTrafficTravelTimeSeconds all come back absent, and traffic=false returns the
+ * identical travel time — so there is nothing to diff against and the UI had no insight
+ * to show even though the travel time itself was changing (61 min at 04:00 against 73 at
+ * 17:00 on one Dutch route).
+ *
+ * So the comparison is built explicitly: the same route costed at several hours, which is
+ * the question a convoy planner actually asks — when should we leave. One request per
+ * hour, run at low concurrency and cached for ten minutes, since the answer only moves
+ * with TomTom's historical model.
+ */
+routeRouter.post('/time-profile', async (req, res, next) => {
+  const { start, end, profileId = 'light-vehicle', custom, avoid, date } = req.body || {};
+  if (!validPoint(start) || !validPoint(end)) {
+    return res.status(400).json({ error: 'start and end must each be {lat, lon}' });
+  }
+
+  const { constraints } = resolveConstraints({ profileId, custom });
+  const locations = `${Number(start.lat)},${Number(start.lon)}:${Number(end.lat)},${Number(end.lon)}`;
+  const day = date ? new Date(date) : new Date(Date.now() + 24 * 3600 * 1000);
+  if (Number.isNaN(day.getTime())) {
+    return res.status(400).json({ error: 'date is not a valid timestamp' });
+  }
+
+  const key = JSON.stringify([locations, profileId, custom || null, sanitiseAvoid(avoid), day.toDateString()]);
+  const cached = timeProfileCache.get(key);
+  if (cached) {
+    res.set('x-cache', 'hit');
+    return res.json(cached);
+  }
+
+  try {
+    const tasks = PROFILE_HOURS.map((hour) => async () => {
+      const at = new Date(day);
+      at.setHours(hour, 0, 0, 0);
+      const params = {
+        ...constraints,
+        traffic: 'true',
+        routeType: 'fastest',
+        maxAlternatives: 0,
+        departAt: at.toISOString().replace(/\.\d{3}Z$/, 'Z'),
+        ...(sanitiseAvoid(avoid).length ? { avoid: sanitiseAvoid(avoid) } : {}),
+      };
+      const json = await tomtomJson(
+        tomtomUrl(`${ROUTING_ENDPOINT.path}/${locations}/json`, params),
+        { timeoutMs: 12_000 },
+      );
+      const s = json.routes?.[0]?.summary;
+      return {
+        hour,
+        travelSeconds: s?.travelTimeInSeconds ?? null,
+        lengthMeters: s?.lengthInMeters ?? null,
+      };
+    });
+
+    // Sequential-ish: this is six calls for one answer, not a user-facing latency path.
+    const settled = [];
+    for (const t of tasks) {
+      try {
+        settled.push(await t());
+      } catch (err) {
+        console.warn('[time-profile]', err.message);
+        settled.push(null);
+      }
+    }
+
+    const points = settled.filter((x) => x && x.travelSeconds != null);
+    if (!points.length) {
+      return res.status(502).json({ error: 'No travel times available for those hours.' });
+    }
+    const best = points.reduce((a, b) => (b.travelSeconds < a.travelSeconds ? b : a));
+    const worst = points.reduce((a, b) => (b.travelSeconds > a.travelSeconds ? b : a));
+
+    const payload = {
+      date: day.toISOString(),
+      points,
+      best,
+      worst,
+      spreadSeconds: worst.travelSeconds - best.travelSeconds,
+      missing: settled.filter((x) => !x || x.travelSeconds == null).length,
+      note: 'Typical travel times from TomTom historical traffic. For a future departure TomTom reports no separate delay figure, so these are compared against each other rather than against free-flow.',
+    };
+    timeProfileCache.set(key, payload);
+    return res.json(payload);
+  } catch (err) {
+    return next(err);
+  }
+});

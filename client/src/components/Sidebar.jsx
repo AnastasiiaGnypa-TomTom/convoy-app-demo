@@ -120,6 +120,9 @@ export default function Sidebar({
   onTimeModeChange,
   onTimeValueChange,
   timing,
+  // ux-insight
+  timeProfile,
+  timeProfileLoading,
   avoid,
   onAvoidChange,
   composition,
@@ -127,6 +130,7 @@ export default function Sidebar({
   onPrint, // task 10a
   // ux-highlight
   onSelectRoadType,
+  onShowWholeRoute, // ux-fit
   highlightedRoadTypeId,
   onSelectRoundabout,
   // ux
@@ -408,6 +412,14 @@ export default function Sidebar({
                 </div>
               )}
 
+              {/* ux-fit: an explicit way back to the whole route, for when the automatic
+                  framing does not fire on some path. */}
+              {onShowWholeRoute && (
+                <button type="button" className="link-btn show-route" onClick={onShowWholeRoute}>
+                  Show whole route on the map
+                </button>
+              )}
+
               {/* task 8 / ux: kept mounted; open state lives in App so it never self-closes. */}
               <Disclosure
                 id="depart"
@@ -439,6 +451,71 @@ export default function Sidebar({
                 {timeMode !== 'now' && (
                   <DepartureTimeInput value={timeValue} onCommit={onTimeValueChange} />
                 )}
+                {/*
+                  * ux-insight: the actual traffic insight.
+                  *
+                  * TomTom reports no delay figure for a future departure — trafficDelay,
+                  * noTrafficTravelTime and historicTrafficTravelTime all come back empty,
+                  * and traffic=false returns the same time — so there is nothing to show
+                  * as "X min of delay". Comparing the hours against each other is both
+                  * obtainable and the question actually being asked: when should we leave.
+                  */}
+                {timeProfileLoading && !timeProfile && (
+                  <p className="depart-note">Costing the journey across the day…</p>
+                )}
+                {timeProfile?.points?.length > 0 && (
+                  <div className="tp">
+                    <div className="tp-head">
+                      <span>Typical travel time by departure</span>
+                      {timeProfile.spreadSeconds > 60 && (
+                        <span className="tp-spread">
+                          {Math.round(timeProfile.spreadSeconds / 60)} min spread
+                        </span>
+                      )}
+                    </div>
+                    <ul className="tp-list">
+                      {timeProfile.points.map((pt) => {
+                        const mins = Math.round(pt.travelSeconds / 60);
+                        const worst = Math.round(timeProfile.worst.travelSeconds / 60) || 1;
+                        const isBest = pt.hour === timeProfile.best.hour;
+                        const isWorst = pt.hour === timeProfile.worst.hour;
+                        // Mark the hour the user actually chose, if any.
+                        const chosen =
+                          timeMode !== 'now' && timeValue
+                            ? Number(timeValue.slice(11, 13)) === pt.hour
+                            : false;
+                        return (
+                          <li
+                            key={pt.hour}
+                            className={`tp-row ${isBest ? 'tp-best' : ''} ${isWorst ? 'tp-worst' : ''} ${chosen ? 'tp-chosen' : ''}`}
+                          >
+                            <span className="tp-hour">
+                              {String(pt.hour).padStart(2, '0')}:00
+                            </span>
+                            <span className="tp-bar" aria-hidden="true">
+                              <span style={{ width: `${Math.max(6, (mins / worst) * 100)}%` }} />
+                            </span>
+                            <span className="tp-val">{mins} min</span>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                    {timeProfile.spreadSeconds > 60 && (
+                      <p className="depart-note">
+                        Leaving at {String(timeProfile.best.hour).padStart(2, '0')}:00 is{' '}
+                        {Math.round(timeProfile.spreadSeconds / 60)} min faster than{' '}
+                        {String(timeProfile.worst.hour).padStart(2, '0')}:00.
+                      </p>
+                    )}
+                    {timeProfile.missing > 0 && (
+                      <p className="depart-note">
+                        {timeProfile.missing} hour{timeProfile.missing === 1 ? '' : 's'} could not
+                        be costed and {timeProfile.missing === 1 ? 'is' : 'are'} omitted.
+                      </p>
+                    )}
+                  </div>
+                )}
+
                 <p className="depart-note">
                   Uses typical traffic for the chosen time. A time <em>window</em> is not
                   supported by routing — pick a departure or an arrival.

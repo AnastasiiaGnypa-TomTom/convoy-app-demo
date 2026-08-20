@@ -139,3 +139,18 @@ export function requestRoute(
     body: { start, end, profileId, custom, maxAlternatives, avoid, departAt, arriveAt },
   });
 }
+
+/**
+ * ux-insight: travel time at several departure hours.
+ *
+ * Separate from the route request because it costs one vendor call per hour and is only
+ * wanted when someone is actually thinking about departure time — fetched when that
+ * panel is opened, not on every route.
+ */
+export function fetchTimeProfile({ start, end, profileId, custom, avoid }, { signal } = {}) {
+  return request('/api/route/time-profile', {
+    method: 'POST',
+    signal,
+    body: { start, end, profileId, custom, avoid },
+  });
+}
