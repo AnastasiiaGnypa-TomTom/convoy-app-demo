@@ -21,6 +21,15 @@ export default function CameraControls({ map, maxPitch = 70, hidden }) {
   const [pitch, setPitch] = useState(0);
   const dialRef = useRef(null);
   const draggingRef = useRef(false);
+  /*
+   * Double-tap detection, done here rather than with onDoubleClick.
+   *
+   * Taking pointer capture on pointerdown — needed so a drag survives leaving the small
+   * circle — swallows the click/dblclick sequence, so React's onDoubleClick never fired
+   * and the reset silently did nothing. Timing two pointerdowns is independent of that
+   * and works for touch as well as mouse.
+   */
+  const lastTapRef = useRef(0);
 
   // Follow the camera, so the readout is never a stale echo of our own input.
   useEffect(() => {
@@ -45,33 +54,56 @@ export default function CameraControls({ map, maxPitch = 70, hidden }) {
    * pointer, so the compass follows the finger exactly instead of applying a delta.
    * Pointer capture keeps the drag alive when the pointer leaves the small circle.
    */
+  /*
+   * Angle from the dial centre to the pointer, or null in a small dead zone.
+   *
+   * The dead zone is not cosmetic. At the exact centre dx and dy are both 0 and
+   * `Math.atan2(0, -0)` is PI, so a click in the middle snapped the map to 180 degrees —
+   * which is what broke double-click-for-north: the second click's pointerdown set 180
+   * before the reset could run. Near the centre there is no meaningful direction anyway,
+   * so a click there is a click, not a rotation.
+   */
+  const resetNorth = () => map?.easeTo({ bearing: 0, duration: 400, essential: true });
+
+  const DEAD_ZONE = 0.3; // fraction of the radius
   const angleFromEvent = (e) => {
     const el = dialRef.current;
-    if (!el) return 0;
+    if (!el) return null;
     const r = el.getBoundingClientRect();
     const dx = e.clientX - (r.left + r.width / 2);
     const dy = e.clientY - (r.top + r.height / 2);
+    if (Math.hypot(dx, dy) < (r.width / 2) * DEAD_ZONE) return null;
     // atan2 measured from north, clockwise, matching MapLibre's bearing convention.
     return (Math.atan2(dx, -dy) * 180) / Math.PI;
   };
 
   const onPointerDown = (e) => {
     if (!map) return;
+
+    const now = Date.now();
+    const isDoubleTap = now - lastTapRef.current < 350;
+    lastTapRef.current = now;
+    if (isDoubleTap) {
+      draggingRef.current = false;
+      resetNorth();
+      return;
+    }
+
     draggingRef.current = true;
     e.currentTarget.setPointerCapture?.(e.pointerId);
+    const a = angleFromEvent(e);
     // jumpTo, not easeTo: an animation per pointer event fights the next one.
-    map.jumpTo({ bearing: angleFromEvent(e) });
+    if (a !== null) map.jumpTo({ bearing: a });
   };
   const onPointerMove = (e) => {
     if (!draggingRef.current || !map) return;
-    map.jumpTo({ bearing: angleFromEvent(e) });
+    const a = angleFromEvent(e);
+    if (a !== null) map.jumpTo({ bearing: a });
   };
   const onPointerUp = (e) => {
     draggingRef.current = false;
     e.currentTarget.releasePointerCapture?.(e.pointerId);
   };
-
-  const resetNorth = () => map?.easeTo({ bearing: 0, duration: 400, essential: true });
 
   const applyPitch = (next) => {
     if (!map) return;

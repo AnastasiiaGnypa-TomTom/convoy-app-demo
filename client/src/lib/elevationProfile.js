@@ -56,7 +56,9 @@ export function sampleRouteElevation(map, coordinates, { maxGradePercent } = {})
 
     let elevation = null;
     try {
-      elevation = map.queryTerrainElevation({ lng, lat });
+      // exaggerated:false so the profile reports TRUE elevation regardless of the
+      // visual terrain-exaggeration slider (otherwise e.g. 2.5x inflates every number).
+      elevation = map.queryTerrainElevation({ lng, lat }, { exaggerated: false });
     } catch {
       elevation = null;
     }
@@ -85,6 +87,28 @@ export function sampleRouteElevation(map, coordinates, { maxGradePercent } = {})
     }
   }
 
+  /* --------------------------------------------------------- smooth noise */
+  // queryTerrainElevation reads whatever DEM tiles are currently loaded; when only
+  // part of a long route is in view, or at tile/LOD boundaries, single samples jump
+  // by tens of metres. Unsmoothed, that produces impossible grades (140%+) and hugely
+  // inflated gain/loss. A short moving average (~5 samples ≈ 500 m) removes the noise
+  // while keeping real hills. Applied to elevation so the chart and analysis agree.
+  {
+    const raw = samples.map((s) => s.elevation);
+    const H = 2; // half-window
+    for (let i = 0; i < samples.length; i++) {
+      let sum = 0;
+      let n = 0;
+      for (let k = i - H; k <= i + H; k++) {
+        if (k >= 0 && k < raw.length && raw[k] != null) {
+          sum += raw[k];
+          n++;
+        }
+      }
+      if (n) samples[i].elevation = sum / n;
+    }
+  }
+
   /* ------------------------------------------------------------- analysis */
   let totalGain = 0;
   let totalLoss = 0;
@@ -95,14 +119,17 @@ export function sampleRouteElevation(map, coordinates, { maxGradePercent } = {})
   for (let i = 1; i < samples.length; i++) {
     const rise = samples[i].elevation - samples[i - 1].elevation;
     const run = samples[i].distance - samples[i - 1].distance;
-    if (rise > 0) totalGain += rise;
-    else totalLoss -= rise;
+    // 0.5 m dead-band: ignore residual sub-metre DEM jitter so gain/loss is not
+    // inflated by noise (a flat city route was reporting thousands of metres).
+    if (rise > 0.5) totalGain += rise;
+    else if (rise < -0.5) totalLoss -= rise;
 
-    // Signed grade as a percentage; run is ~100 m so this is a real slope, not noise
-    // from two adjacent vertices.
+    // Signed grade as a percentage; run is ~100 m so this is a real slope.
     const grade = run > 0 ? (rise / run) * 100 : 0;
     samples[i].grade = grade;
-    if (Math.abs(grade) > Math.abs(maxGrade)) {
+    // Cap consideration at a physically plausible road grade; anything above ~45%
+    // is residual DEM noise, not a real slope (was reporting 142%).
+    if (Math.abs(grade) <= 45 && Math.abs(grade) > Math.abs(maxGrade)) {
       maxGrade = grade;
       maxGradeAt = samples[i].distance;
     }
