@@ -40,9 +40,18 @@ const prefersReducedMotion = () =>
   window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
 
 /** Puck sits low so the road ahead fills the view. */
-function navPadding(map) {
-  const h = map.getContainer()?.clientHeight || 600;
-  return { top: 0, bottom: Math.round(h * 0.4), left: 0, right: 0 };
+/*
+ * ux-center: no padding, so the vehicle sits in the CENTRE of the map.
+ *
+ * This used to push the camera centre 40% of the height downward, the usual satnav
+ * placement that trades a centred vehicle for more visible road ahead. For a briefing
+ * fly-through the vehicle being dead centre is what is wanted, so the offset is gone.
+ *
+ * The trade-off is real and worth knowing: at 60° pitch a centred vehicle shows roughly
+ * half as much road ahead. Restore the old feel by putting `bottom` back to h * 0.4.
+ */
+function navPadding() {
+  return { top: 0, bottom: 0, left: 0, right: 0 };
 }
 
 const narrow = () =>
@@ -129,7 +138,7 @@ export function createCameraController(map) {
         zoom: overhead ? OVERHEAD_ZOOM : NAV_ZOOM,
         pitch,
         bearing: overhead ? 0 : bearing,
-        padding: overhead ? { top: 0, bottom: 0, left: 0, right: 0 } : navPadding(map),
+        padding: navPadding(),
         essential: true,
       };
       if (reduced()) {
@@ -258,6 +267,35 @@ export function createCameraController(map) {
     },
 
     /** Simple recentre used outside navigation (e.g. "find me"). */
+    /**
+     * ux-center: put a coordinate in the middle of the map.
+     *
+     * Separate from `goTo` because it must work DURING the animation too — the panel is
+     * on screen while mission planning runs, so a structure row can be clicked then, and
+     * `goTo` deliberately refuses in navigate mode. It also passes padding explicitly:
+     * the nav camera sets padding, and inheriting a stale value would land the structure
+     * off-centre for reasons invisible from the call site.
+     *
+     * Centring on the CANVAS is centring in the visible map area, because the side panel
+     * is a real grid column rather than an overlay — the canvas simply does not extend
+     * beneath it.
+     */
+    centerOn({ coord, zoom = 15, duration = 700 }) {
+      trace('centerOn', { mode });
+      const target = {
+        center: coord,
+        zoom,
+        padding: { top: 0, bottom: 0, left: 0, right: 0 },
+        essential: true,
+      };
+      if (reduced()) {
+        map.jumpTo(target);
+        return;
+      }
+      map.easeTo({ ...target, duration });
+      busyUntil = Date.now() + duration;
+    },
+
     goTo({ coord, zoom = 12 }) {
       trace('goTo', { mode });
       if (mode === 'navigate') return;

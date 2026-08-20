@@ -996,7 +996,7 @@ export default function MapView({
     const map = mapRef.current;
     if (!map || !ready || !goTo) return;
     programmaticMoveRef.current = true;
-    cameraRef.current?.goTo({ coord: [goTo.lon, goTo.lat], zoom: goTo.zoom ?? 15 });
+    cameraRef.current?.centerOn({ coord: [goTo.lon, goTo.lat], zoom: goTo.zoom ?? 15 });
   }, [goTo, ready]);
 
   /* ------------------------------------------------------ picking cursor */

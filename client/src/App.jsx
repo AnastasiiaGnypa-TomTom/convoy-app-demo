@@ -1009,8 +1009,14 @@ export default function App() {
      * reusing flyTo meant the marker appeared and the camera never moved. The token lets
      * the same row be clicked twice and still re-centre.
      */
+    /*
+     * ux-center: centre the structure. While the animation is running, also drop the
+     * follow camera — otherwise the next frame would snap straight back to the vehicle
+     * and the click would look broken. Re-centre restores following.
+     */
+    if (mode === 'navigate') setFollowCamera(false);
     setGoTo({ lat: structure.coord[1], lon: structure.coord[0], zoom: 15, token: Date.now() });
-  }, [highlightedStructure, selectedRouteCoords]);
+  }, [highlightedStructure, selectedRouteCoords, mode]);
 
   const handleLocatePoiLayer = useCallback(
     (layerId) => {
