@@ -951,6 +951,34 @@ export default function App() {
 
   const handleSelectStructure = useCallback((structure, key) => {
     if (!structure?.coord) return;
+
+    /*
+     * Clicking the ACTIVE row again zooms back out to the whole route.
+     *
+     * It used to be one-way: the first click flew in to the structure and every click
+     * after that was a no-op, so there was no way back to the overview short of
+     * re-planning the route or panning by hand. A row that highlights something should
+     * un-highlight it, and the camera should follow that.
+     */
+    if (highlightedStructure?.key === key) {
+      setHighlightedStructure(null);
+      const coords = selectedRouteCoords;
+      if (coords?.length) {
+        let w = 180;
+        let so = 90;
+        let e = -180;
+        let n = -90;
+        for (const [lon, lat] of coords) {
+          if (lon < w) w = lon;
+          if (lon > e) e = lon;
+          if (lat < so) so = lat;
+          if (lat > n) n = lat;
+        }
+        setFitBounds({ bounds: [w, so, e, n], token: Date.now() });
+      }
+      return;
+    }
+
     setHighlightedStructure({ structure, key });
     /*
      * A dedicated camera request, NOT the `flyTo` prop.
@@ -961,7 +989,7 @@ export default function App() {
      * the same row be clicked twice and still re-centre.
      */
     setGoTo({ lat: structure.coord[1], lon: structure.coord[0], zoom: 15, token: Date.now() });
-  }, []);
+  }, [highlightedStructure, selectedRouteCoords]);
 
   const handleLocatePoiLayer = useCallback(
     (layerId) => {

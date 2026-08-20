@@ -299,7 +299,10 @@ export default function Sidebar({
                             type="button"
                             className={`rs rs-${x.kind} rs-btn ${isActive ? 'rs-active' : ''}`}
                             onClick={() => onSelectStructure?.(x, key)}
-                            title="Show this on the map"
+                            // The label has to say it toggles, or the second click is
+                            // never discovered.
+                            title={isActive ? 'Back to the whole route' : 'Show this on the map'}
+                            aria-pressed={isActive}
                           >
                             <span className="rs-glyph" aria-hidden="true">
                               {x.kind === 'tunnel' ? '◠' : '⌒'}
