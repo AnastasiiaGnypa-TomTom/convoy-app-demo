@@ -114,6 +114,27 @@ export default function App() {
    * on entry — an interactive WebGL map cannot print, and MapLibre's canvas is blank when
    * read unless the frame is grabbed deliberately.
    */
+  /*
+   * ux: which route inputs have already been sent to mission planning.
+   *
+   * The button hides on click and comes back only when the plan would be for a
+   * DIFFERENT route — a new start, a new destination, or a different alternative.
+   * Anything else (a data refresh, a layer toggle, an avoidance change re-costing the
+   * same road) leaves it hidden, because it is still the route you just planned.
+   */
+  const [plannedRouteKey, setPlannedRouteKey] = useState(null);
+  /*
+   * ux: open/closed state for the panel disclosures, lifted out of the DOM.
+   *
+   * These blocks are conditionally rendered siblings, so a route recompute re-keys the
+   * list and remounts them; a native <details> lost its `open` every time, which is the
+   * flicker. Held here, above anything that remounts, so nothing closes by itself.
+   */
+  const [openPanels, setOpenPanels] = useState({});
+  const togglePanel = useCallback((id) => {
+    setOpenPanels((prev) => ({ ...prev, [id]: !prev[id] }));
+  }, []);
+
   const [printing, setPrinting] = useState(false);
   const [printSnapshot, setPrintSnapshot] = useState(null);
   const [routeLoading, setRouteLoading] = useState(false);
@@ -1224,11 +1245,27 @@ export default function App() {
    * full-route download. Everything beyond that is the rolling window's job. Skipped
    * entirely on the vector basemap, where there is no imagery to warm.
    */
+  /*
+   * ux: identity of the route the mission-planning button applies to.
+   *
+   * Start, destination and which alternative is selected — deliberately NOT the
+   * avoidance or departure-time settings. Those re-cost the same journey, and having the
+   * button reappear every time one is nudged is the churn this is meant to avoid.
+   */
+  const routeInputKey =
+    start && end
+      ? `${start.lat?.toFixed?.(5)},${start.lon?.toFixed?.(5)}|${end.lat?.toFixed?.(5)},${end.lon?.toFixed?.(5)}|${selectedIndex ?? 0}`
+      : null;
+  const missionPlanned = Boolean(routeInputKey) && plannedRouteKey === routeInputKey;
+
   const startNavigation = useCallback(async () => {
     const feature = routeData?.routes?.features?.find(
       (f) => f.properties.index === (selectedIndex ?? 0),
     );
     if (!feature) return;
+
+    // ux: hide the button — this route is now planned.
+    if (routeInputKey) setPlannedRouteKey(routeInputKey);
 
     seek(0);
     setPaused(false);
@@ -1252,7 +1289,17 @@ export default function App() {
     }
 
     setMode('navigate');
-  }, [routeData, selectedIndex, seek, setPaused, basemap, effectiveImageryMode, captureDate, routeIndex]);
+  }, [
+    routeData,
+    selectedIndex,
+    seek,
+    setPaused,
+    basemap,
+    effectiveImageryMode,
+    captureDate,
+    routeIndex,
+    routeInputKey,
+  ]);
 
   const endNavigation = useCallback(() => {
     setMode('browse');
@@ -1520,6 +1567,10 @@ export default function App() {
             onSwap={handleSwap}
             onClear={handleClear}
             onGo={startNavigation}
+            /* ux */
+            missionPlanned={missionPlanned}
+            openPanels={openPanels}
+            onTogglePanel={togglePanel}
             basemap={basemap}
             view={view}
             exaggeration={exaggeration}

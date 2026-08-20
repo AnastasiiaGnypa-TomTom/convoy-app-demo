@@ -2684,3 +2684,71 @@ h2 {
   .print-table { break-inside: auto; }
   tr { break-inside: avoid; }
 }
+
+/* ───────────── ux: smooth, persistent disclosures ───────────── */
+.disc { border-top: 1px solid var(--border); }
+.disc:first-of-type { border-top: 0; }
+
+.disc-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.45rem;
+  width: 100%;
+  padding: 0.45rem 0;
+  background: none;
+  border: 0;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  cursor: pointer;
+  text-align: left;
+}
+.disc-head:hover { color: var(--text); }
+.disc-head:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.disc-disabled .disc-head { opacity: 0.5; cursor: default; }
+.disc-title { flex: none; }
+.disc-hint {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: 0.7rem;
+  color: var(--accent);
+}
+.disc-chev {
+  flex: none;
+  transition: transform 220ms ease;
+  font-size: 0.95rem;
+  line-height: 1;
+}
+.disc-open .disc-chev { transform: rotate(90deg); }
+
+/*
+ * 0fr → 1fr animates without needing a measured pixel height, so the panel opens
+ * smoothly whatever is inside it. `visibility` is delayed on close so the fade is
+ * visible rather than snapping away.
+ */
+.disc-wrap {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows 240ms ease, opacity 200ms ease, visibility 0s linear 240ms;
+  opacity: 0;
+  visibility: hidden;
+}
+.disc-open .disc-wrap {
+  grid-template-rows: 1fr;
+  opacity: 1;
+  visibility: visible;
+  transition: grid-template-rows 240ms ease, opacity 200ms ease 40ms, visibility 0s;
+}
+.disc-body { overflow: hidden; }
+.disc-body > :last-child { margin-bottom: 0.5rem; }
+
+@media (prefers-reduced-motion: reduce) {
+  .disc-wrap, .disc-chev { transition: none; }
+}

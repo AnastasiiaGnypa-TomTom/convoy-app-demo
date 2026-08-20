@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import Disclosure from './Disclosure.jsx'; // ux
 import PlaceInput from './PlaceInput.jsx';
 import ViewToggles from './ViewToggles.jsx';
 import { formatDelay, formatDistance, formatDuration, formatVehicleSpec } from '../lib/format.js';
@@ -69,6 +70,10 @@ export default function Sidebar({
   composition,
   roundabouts, // task 9
   onPrint, // task 10a
+  // ux
+  missionPlanned,
+  openPanels,
+  onTogglePanel,
   onSelectStructure,
   highlightedStructureKey,
   routeLoading,
@@ -331,14 +336,18 @@ export default function Sidebar({
                 </div>
               )}
 
-              {/* task 8: when the convoy leaves, which changes the ETA via historical traffic. */}
-              <details className="depart-block">
-                <summary>
-                  Departure time
-                  {timeMode !== 'now' && timeValue
-                    ? ` · ${timeMode === 'arrive' ? 'arrive by' : 'depart'} ${timeValue.slice(11, 16)}`
-                    : ' · now'}
-                </summary>
+              {/* task 8 / ux: kept mounted; open state lives in App so it never self-closes. */}
+              <Disclosure
+                id="depart"
+                title="Departure time"
+                hint={
+                  timeMode !== 'now' && timeValue
+                    ? `${timeMode === 'arrive' ? 'arrive by' : 'depart'} ${timeValue.slice(11, 16)}`
+                    : 'now'
+                }
+                open={Boolean(openPanels?.depart)}
+                onToggle={onTogglePanel}
+              >
                 <div className="depart-modes">
                   {[
                     ['now', 'Leave now'],
@@ -363,12 +372,6 @@ export default function Sidebar({
                     onChange={(e) => onTimeValueChange?.(e.target.value)}
                   />
                 )}
-                {/*
-                  * Both notes are deliberate. TomTom has no time-WINDOW parameter —
-                  * departAt and arriveAt are mutually exclusive (400 if both are sent) —
-                  * and restricted-hours enforcement is not a routing parameter at all,
-                  * so it is labelled future work rather than implied to work.
-                  */}
                 <p className="depart-note">
                   Uses typical traffic for the chosen time. A time <em>window</em> is not
                   supported by routing — pick a departure or an arrival.
@@ -382,102 +385,103 @@ export default function Sidebar({
                     Both a departure and an arrival were set; the departure was used.
                   </p>
                 )}
-              </details>
+              </Disclosure>
 
-              {/* task 7: avoidance toggles + what the route is actually made of. */}
-              {avoidOptions?.length > 0 && (
-                <details className="avoid-block">
-                  <summary>Avoid road types</summary>
-                  <ul className="avoid-list">
-                    {avoidOptions.map((o) => (
-                      <li key={o.id}>
-                        <label className={`avoid-row ${o.supported ? '' : 'avoid-row-off'}`}>
-                          <input
-                            type="checkbox"
-                            checked={Boolean(avoid?.includes(o.id))}
-                            disabled={!o.supported}
-                            onChange={() =>
-                              onAvoidChange?.(
-                                avoid?.includes(o.id)
-                                  ? avoid.filter((x) => x !== o.id)
-                                  : [...(avoid || []), o.id],
-                              )
-                            }
-                          />
-                          <span>{o.label}</span>
-                          {/*
-                            * Shown but disabled, with the reason. Hiding it would leave a
-                            * planner assuming a bridge-free route is possible; faking it
-                            * would be worse.
-                            */}
-                          {!o.supported && <em className="avoid-why">{o.reason}</em>}
-                        </label>
+              {/* task 7 / ux: always mounted; disabled rather than removed when the
+                  catalogue has not arrived yet, so the panel never vanishes mid-use. */}
+              <Disclosure
+                id="avoid"
+                title="Avoid road types"
+                hint={avoid?.length ? `${avoid.length} active` : ''}
+                open={Boolean(openPanels?.avoid)}
+                onToggle={onTogglePanel}
+                disabled={!avoidOptions?.length}
+              >
+                <ul className="avoid-list">
+                  {(avoidOptions || []).map((o) => (
+                    <li key={o.id}>
+                      <label className={`avoid-row ${o.supported ? '' : 'avoid-row-off'}`}>
+                        <input
+                          type="checkbox"
+                          checked={Boolean(avoid?.includes(o.id))}
+                          disabled={!o.supported}
+                          onChange={() =>
+                            onAvoidChange?.(
+                              avoid?.includes(o.id)
+                                ? avoid.filter((x) => x !== o.id)
+                                : [...(avoid || []), o.id],
+                            )
+                          }
+                        />
+                        <span>{o.label}</span>
+                        {!o.supported && <em className="avoid-why">{o.reason}</em>}
+                      </label>
+                    </li>
+                  ))}
+                </ul>
+              </Disclosure>
+
+              <Disclosure
+                id="makeup"
+                title="Route makeup"
+                hint={
+                  composition?.types?.[0]
+                    ? `${composition.types[0].label} ${composition.types[0].percent}%`
+                    : ''
+                }
+                open={Boolean(openPanels?.makeup)}
+                onToggle={onTogglePanel}
+                disabled={!composition?.types?.length}
+              >
+                <ul className="comp-list">
+                  {(composition?.types || []).map((t) => (
+                    <li key={t.type} className="comp-row">
+                      <span className="comp-label">{t.label}</span>
+                      <span className="comp-bar" aria-hidden="true">
+                        <span style={{ width: `${Math.min(100, t.percent)}%` }} />
+                      </span>
+                      <span className="comp-val">
+                        {t.percent}% · {(t.meters / 1000).toFixed(1)} km
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+                {composition?.unreported?.length > 0 && (
+                  <p className="comp-note">None on this route: {composition.unreported.join(', ')}.</p>
+                )}
+                {composition?.note && <p className="comp-note">{composition.note}</p>}
+              </Disclosure>
+
+              {/* task 9 / ux */}
+              <Disclosure
+                id="roundabouts"
+                title="Roundabouts"
+                hint={roundabouts ? String(roundabouts.count) : ''}
+                open={Boolean(openPanels?.roundabouts)}
+                onToggle={onTogglePanel}
+                disabled={!roundabouts}
+              >
+                {roundabouts?.count ? (
+                  <ul className="rb-list">
+                    {roundabouts.items.map((r, i) => (
+                      <li key={`${r.distanceMeters}-${i}`} className="rb-row">
+                        <span className="rb-at">
+                          {r.distanceMeters < 1000
+                            ? `${Math.round(r.distanceMeters / 10) * 10} m`
+                            : `${(r.distanceMeters / 1000).toFixed(1)} km`}
+                        </span>
+                        <span className="rb-name">{r.street || 'Roundabout'}</span>
+                        {r.exit != null && <span className="rb-exit">exit {r.exit}</span>}
                       </li>
                     ))}
                   </ul>
-                </details>
-              )}
-
-              {composition?.types && (
-                <details className="comp-block">
-                  <summary>
-                    Route makeup
-                    {composition.types[0] ? ` · ${composition.types[0].label} ${composition.types[0].percent}%` : ''}
-                  </summary>
-                  <ul className="comp-list">
-                    {composition.types.map((t) => (
-                      <li key={t.type} className="comp-row">
-                        <span className="comp-label">{t.label}</span>
-                        <span className="comp-bar" aria-hidden="true">
-                          <span style={{ width: `${Math.min(100, t.percent)}%` }} />
-                        </span>
-                        <span className="comp-val">
-                          {t.percent}% · {(t.meters / 1000).toFixed(1)} km
-                        </span>
-                      </li>
-                    ))}
-                  </ul>
-                  {composition.unreported?.length > 0 && (
-                    <p className="comp-note">
-                      None on this route: {composition.unreported.join(', ')}.
-                    </p>
-                  )}
-                  <p className="comp-note">{composition.note}</p>
-                </details>
-              )}
-
-              {/* task 9: roundabouts from the guidance; rail crossings have no source yet. */}
-              {roundabouts && (
-                <details className="rb-block">
-                  <summary>
-                    Roundabouts · {roundabouts.count}
-                  </summary>
-                  {roundabouts.count > 0 ? (
-                    <ul className="rb-list">
-                      {roundabouts.items.map((r, i) => (
-                        <li key={`${r.distanceMeters}-${i}`} className="rb-row">
-                          <span className="rb-at">
-                            {r.distanceMeters < 1000
-                              ? `${Math.round(r.distanceMeters / 10) * 10} m`
-                              : `${(r.distanceMeters / 1000).toFixed(1)} km`}
-                          </span>
-                          <span className="rb-name">{r.street || 'Roundabout'}</span>
-                          {r.exit != null && <span className="rb-exit">exit {r.exit}</span>}
-                        </li>
-                      ))}
-                    </ul>
-                  ) : (
-                    <p className="comp-note">None on this route.</p>
-                  )}
-                  {/*
-                    * Stated, not hidden. Inventing crossings would be worse than a gap:
-                    * a planner would act on them.
-                    */}
-                  <p className="comp-note rb-pending">
-                    Railroad crossings: pending data source. {roundabouts.railCrossings?.note}
-                  </p>
-                </details>
-              )}
+                ) : (
+                  <p className="comp-note">None on this route.</p>
+                )}
+                <p className="comp-note rb-pending">
+                  Railroad crossings: pending data source. {roundabouts?.railCrossings?.note}
+                </p>
+              </Disclosure>
 
               {/*
                 * "Mission planning", not "navigation": this runs an animated fly-through
@@ -485,9 +489,16 @@ export default function Sidebar({
                 * navigation invited a defence audience to assume in-vehicle guidance,
                 * which is a promise the demo cannot keep.
                 */}
-              <button type="button" className="btn-primary btn-go" onClick={onGo}>
-                Start mission planning
-              </button>
+              {/*
+                * ux: hidden once this route has been planned. It returns only when the
+                * route inputs change (start, destination, or a different alternative) —
+                * see routeInputKey in App.
+                */}
+              {!missionPlanned && (
+                <button type="button" className="btn-primary btn-go" onClick={onGo}>
+                  Start mission planning
+                </button>
+              )}
 
               {/* task 10a: printable plan. Export only — no sharing, sync or permissions. */}
               {onPrint && (
