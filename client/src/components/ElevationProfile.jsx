@@ -56,7 +56,23 @@ export default function ElevationProfile({ profile, vehicleLabel, gradeLimit, un
         </span>
       </div>
 
-      <svg className="elev-chart" viewBox={`0 0 ${W} ${H}`} role="img" aria-label="Route elevation profile">
+      {/*
+        * ux-elev: preserveAspectRatio="none" so the chart FILLS its box.
+        *
+        * The default (xMidYMid meet) letterboxes a 300x90 viewBox inside a wide, short
+        * container — the chart drew centred with dead space either side, which is why it
+        * never reached the edges of the strip. Stretching is right here: both axes are
+        * independent scales (distance and metres), so there is no aspect ratio to
+        * preserve, and the axis labels are drawn in the same user units so they stretch
+        * with it.
+        */}
+      <svg
+        className="elev-chart"
+        viewBox={`0 0 ${W} ${H}`}
+        preserveAspectRatio="none"
+        role="img"
+        aria-label="Route elevation profile"
+      >
         <path d={area} className="elev-area" />
         {/* Steep bands behind the line so the line stays readable. */}
         {profile.steepSegments.map((seg, i) => (

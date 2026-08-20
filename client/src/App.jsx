@@ -281,10 +281,63 @@ export default function App() {
    * each produce a distinct signal.
    */
   const [elevStripOpen, setElevStripOpen] = useState(true);
+  /*
+   * ux-elev: the strip's height, draggable and remembered.
+   *
+   * Stored in px because that is what the drag produces and what the map has to be told
+   * about; a rem value would need converting on every pointer event. Clamped so it can
+   * neither vanish nor swallow the map.
+   */
+  const ELEV_MIN_H = 70;
+  const ELEV_MAX_H = 420;
+  const [elevStripHeight, setElevStripHeight] = useState(() => {
+    const saved = Number(localStorage.getItem('convoyElevHeight'));
+    return Number.isFinite(saved) && saved >= 70 && saved <= 420 ? saved : 136;
+  });
   const [mapResizeToken, setMapResizeToken] = useState(0);
 
   const elevStripAvailable = Boolean(
     routeData?.routes?.features?.length && elevProfile && !elevProfile.insufficient,
+  );
+
+  /*
+   * ux-elev: drag the strip's top edge to resize.
+   *
+   * The map is told to resize on every step, not just at the end: MapLibre caches its
+   * canvas size, so a mid-drag map would render at the old height and every click would
+   * land at the wrong coordinate until the drag finished.
+   */
+  const elevDragRef = useRef(null);
+  const onElevResizeStart = useCallback(
+    (e) => {
+      elevDragRef.current = { y: e.clientY, h: elevStripHeight };
+      e.currentTarget.setPointerCapture?.(e.pointerId);
+    },
+    [elevStripHeight],
+  );
+  const elevLiveHeightRef = useRef(null);
+  const onElevResizeMove = useCallback((e) => {
+    const d = elevDragRef.current;
+    if (!d) return;
+    // Dragging up (smaller clientY) makes it taller.
+    const next = Math.min(420, Math.max(70, d.h + (d.y - e.clientY)));
+    // Kept in a ref as well: the pointerup handler's closure can be a render behind the
+    // last move, which persisted a height 18px off what was on screen.
+    elevLiveHeightRef.current = next;
+    setElevStripHeight(next);
+    setMapResizeToken((n) => n + 1);
+  }, []);
+  const onElevResizeEnd = useCallback(
+    (e) => {
+      if (!elevDragRef.current) return;
+      elevDragRef.current = null;
+      e.currentTarget.releasePointerCapture?.(e.pointerId);
+      const finalH = elevLiveHeightRef.current ?? elevStripHeight;
+      elevLiveHeightRef.current = null;
+      localStorage.setItem('convoyElevHeight', String(finalH));
+      setMapResizeToken((n) => n + 1);
+    },
+    [elevStripHeight],
   );
 
   const toggleElevStrip = useCallback(() => {
@@ -1873,7 +1926,28 @@ export default function App() {
           * height for an empty chart.
           */}
         {elevStripAvailable && (
-          <section className={`elev-strip ${elevStripOpen ? '' : 'elev-strip-closed'}`}>
+          <section
+            className={`elev-strip ${elevStripOpen ? '' : 'elev-strip-closed'}`}
+            style={{ '--elev-h': `${elevStripHeight}px` }}
+          >
+            {/* ux-elev: drag this edge to make the strip taller or shorter. */}
+            {elevStripOpen && (
+              <div
+                className="elev-resize"
+                role="separator"
+                aria-orientation="horizontal"
+                aria-label="Resize elevation profile"
+                title="Drag to resize"
+                onPointerDown={onElevResizeStart}
+                onPointerMove={onElevResizeMove}
+                onPointerUp={onElevResizeEnd}
+                onDoubleClick={() => {
+                  setElevStripHeight(136);
+                  localStorage.setItem('convoyElevHeight', '136');
+                  setMapResizeToken((n) => n + 1);
+                }}
+              />
+            )}
             <button
               type="button"
               className="elev-strip-handle"

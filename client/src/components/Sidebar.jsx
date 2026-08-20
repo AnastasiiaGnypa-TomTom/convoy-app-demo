@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import Disclosure from './Disclosure.jsx'; // ux
 import PlaceInput from './PlaceInput.jsx';
 import ViewToggles from './ViewToggles.jsx';
@@ -40,6 +40,61 @@ function Section({ id, title, badge, open, onToggle, children, hidden }) {
       </button>
       {open && <div className="side-body">{children}</div>}
     </section>
+  );
+}
+
+/*
+ * ux-depart: a datetime input that survives being typed into.
+ *
+ * As a plain controlled input this was unusable. A datetime-local field reports value as
+ * an EMPTY STRING until every part is filled, so mid-entry React was handed "" and echoed
+ * it straight back — wiping what had just been typed and dismissing the picker. It read
+ * as "the menu closes and disappears".
+ *
+ * So the field owns a draft while it is being edited, and only complete, parseable values
+ * are committed upward. The parent's value is adopted only when the field is NOT focused,
+ * so an external change (a preset, a reset) still lands, but never mid-keystroke.
+ *
+ * Commits are also debounced: each committed value re-costs the route, and doing that on
+ * every arrow-key nudge of the minutes field is a request per keypress.
+ */
+function DepartureTimeInput({ value, onCommit }) {
+  const [draft, setDraft] = useState(value || '');
+  const focusedRef = useRef(false);
+  const timerRef = useRef(null);
+
+  useEffect(() => {
+    if (!focusedRef.current) setDraft(value || '');
+  }, [value]);
+
+  useEffect(() => () => clearTimeout(timerRef.current), []);
+
+  const onChange = (e) => {
+    const next = e.target.value;
+    setDraft(next);
+    clearTimeout(timerRef.current);
+    // Empty means "still incomplete", not "cleared", so it is never sent upward.
+    if (!next) return;
+    const d = new Date(next);
+    if (Number.isNaN(d.getTime())) return;
+    timerRef.current = setTimeout(() => onCommit?.(next), 600);
+  };
+
+  return (
+    <input
+      type="datetime-local"
+      className="depart-input"
+      value={draft}
+      onFocus={() => {
+        focusedRef.current = true;
+      }}
+      onBlur={() => {
+        focusedRef.current = false;
+        clearTimeout(timerRef.current);
+        if (draft && !Number.isNaN(new Date(draft).getTime())) onCommit?.(draft);
+      }}
+      onChange={onChange}
+    />
   );
 }
 
@@ -365,12 +420,7 @@ export default function Sidebar({
                   ))}
                 </div>
                 {timeMode !== 'now' && (
-                  <input
-                    type="datetime-local"
-                    className="depart-input"
-                    value={timeValue}
-                    onChange={(e) => onTimeValueChange?.(e.target.value)}
-                  />
+                  <DepartureTimeInput value={timeValue} onCommit={onTimeValueChange} />
                 )}
                 <p className="depart-note">
                   Uses typical traffic for the chosen time. A time <em>window</em> is not
