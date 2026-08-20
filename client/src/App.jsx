@@ -137,6 +137,8 @@ export default function App() {
 
   /** ux-camera: the 2D/3D setting to restore when the animation ends. */
   const viewBeforePlanningRef = useRef(null);
+  /** ux-highlight: which road type is traced on the map, if any. */
+  const [highlightedRoadType, setHighlightedRoadType] = useState(null);
   const [printing, setPrinting] = useState(false);
   const [printSnapshot, setPrintSnapshot] = useState(null);
   const [routeLoading, setRouteLoading] = useState(false);
@@ -677,6 +679,11 @@ export default function App() {
     setMapResizeToken((n) => n + 1);
   }, [elevStripAvailable]);
 
+  // ux-highlight: section indices belong to one geometry, so drop the trace on change.
+  useEffect(() => {
+    setHighlightedRoadType(null);
+  }, [routeData, selectedIndex]);
+
   // A structure highlight is meaningless once the route changes beneath it. Placed after
   // selectedRouteKey is declared: a dependency array is evaluated during render, so
   // referencing it any earlier is a temporal-dead-zone error that blanks the app.
@@ -1024,6 +1031,35 @@ export default function App() {
       setPrinting(true);
     }
   }, []);
+
+  /*
+   * ux-highlight: click a road-type row to trace it; click it again to clear.
+   *
+   * Carries the section ranges through rather than just the type name, so the map draws
+   * the exact stretches the percentage was measured from.
+   */
+  const handleSelectRoadType = useCallback((entry) => {
+    setHighlightedRoadType((prev) =>
+      prev?.type === entry?.type ? null : { type: entry.type, sections: entry.sections || [] },
+    );
+  }, []);
+
+  /* ux-highlight: a roundabout behaves like a bridge or tunnel — centre and mark it. */
+  const handleSelectRoundabout = useCallback(
+    (r, key) => {
+      if (r?.lat == null || r?.lon == null) return;
+      if (highlightedStructure?.key === key) {
+        setHighlightedStructure(null);
+        return;
+      }
+      setHighlightedStructure({
+        structure: { kind: 'roundabout', name: r.street || 'Roundabout', coord: [r.lon, r.lat] },
+        key,
+      });
+      setGoTo({ lat: r.lat, lon: r.lon, zoom: 16, token: Date.now() });
+    },
+    [highlightedStructure],
+  );
 
   const handleSelectStructure = useCallback((structure, key) => {
     if (!structure?.coord) return;
@@ -1634,6 +1670,10 @@ export default function App() {
             }
             routeStructures={routeStructureList}
             onSelectStructure={handleSelectStructure}
+            /* ux-highlight */
+            onSelectRoadType={handleSelectRoadType}
+            highlightedRoadTypeId={highlightedRoadType?.type || null}
+            onSelectRoundabout={handleSelectRoundabout}
             onPrint={openPrintView} /* task 10a */
             highlightedStructureKey={highlightedStructure?.key || null}
             selectedIndex={selectedIndex}
@@ -1834,6 +1874,7 @@ export default function App() {
               poiOn={poiOn}
               highlightedPoiLayer={highlightedPoiLayer}
               highlightedStructure={highlightedStructure?.structure || null}
+              highlightedRoadType={highlightedRoadType} /* ux-highlight */
               goTo={goTo}
               fitBounds={fitBounds}
               navigating={navMode}

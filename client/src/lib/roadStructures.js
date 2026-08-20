@@ -1136,3 +1136,85 @@ export function raiseHighlightLayers(map) {
     }
   }
 }
+
+/* ────────────── ux-highlight: road-type highlight on the route ───────────── */
+
+const TYPE_HL_SOURCE = 'route-type-hl-src';
+export const TYPE_HL_LAYERS = { glow: 'route-type-hl-glow', line: 'route-type-hl' };
+
+/**
+ * A layer that traces one road type along the route.
+ *
+ * Drawn from the section index ranges the server measured the percentages from, so what
+ * lights up is exactly what the number counted — not a re-derivation that could disagree
+ * with it.
+ *
+ * Deliberately no camera move when a type is selected: a type like "motorway 90%" covers
+ * most of the route, so there is nothing sensible to fly to, and after the jumping-camera
+ * complaints the safe default is to leave the view where the user put it.
+ */
+export function ensureTypeHighlightLayers(map, beforeId) {
+  if (!map.getSource(TYPE_HL_SOURCE)) {
+    map.addSource(TYPE_HL_SOURCE, { type: 'geojson', data: EMPTY });
+  }
+  if (map.getLayer(TYPE_HL_LAYERS.line)) return;
+
+  const w = (base) => ['interpolate', ['linear'], ['zoom'], 8, base * 0.6, 12, base, 16, base * 1.5];
+  map.addLayer(
+    {
+      id: TYPE_HL_LAYERS.glow,
+      type: 'line',
+      source: TYPE_HL_SOURCE,
+      layout: { 'line-cap': 'round', 'line-join': 'round' },
+      paint: { 'line-color': '#facc15', 'line-width': w(14), 'line-opacity': 0.22, 'line-blur': 4 },
+    },
+    beforeId,
+  );
+  map.addLayer(
+    {
+      id: TYPE_HL_LAYERS.line,
+      type: 'line',
+      source: TYPE_HL_SOURCE,
+      layout: { 'line-cap': 'round', 'line-join': 'round' },
+      // Yellow: distinct from the blue route, the pink/lime structures and the amber
+      // steep band, so four different meanings never share a colour.
+      paint: { 'line-color': '#facc15', 'line-width': w(4.5), 'line-opacity': 0.95 },
+    },
+    beforeId,
+  );
+}
+
+/** Slice the route's coordinates by the server's section ranges. */
+export function setTypeHighlight(map, coordinates, sections) {
+  const src = map.getSource(TYPE_HL_SOURCE);
+  if (!src) return 0;
+  if (!coordinates?.length || !sections?.length) {
+    src.setData(EMPTY);
+    return 0;
+  }
+  const features = [];
+  for (const [a, b] of sections) {
+    const from = Math.max(0, Math.min(coordinates.length - 1, a));
+    const to = Math.max(0, Math.min(coordinates.length - 1, b));
+    if (to <= from) continue;
+    features.push({
+      type: 'Feature',
+      geometry: { type: 'LineString', coordinates: coordinates.slice(from, to + 1) },
+      properties: {},
+    });
+  }
+  src.setData({ type: 'FeatureCollection', features });
+  return features.length;
+}
+
+export function raiseTypeHighlightLayers(map) {
+  for (const id of [TYPE_HL_LAYERS.glow, TYPE_HL_LAYERS.line]) {
+    if (map.getLayer(id)) {
+      try {
+        map.moveLayer(id);
+      } catch {
+        /* layer can vanish during a style swap */
+      }
+    }
+  }
+}

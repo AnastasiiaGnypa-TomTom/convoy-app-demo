@@ -2896,3 +2896,26 @@ h2 {
 /* ux: previous results stay visible while a recompute runs, just dimmed. */
 .dir-block { display: contents; }
 .dir-updating { opacity: 0.75; transition: opacity 160ms ease; }
+
+/* ───────────── ux-highlight: clickable makeup + roundabout rows ───────────── */
+.comp-btn, .rb-btn {
+  width: 100%;
+  background: none;
+  border: 0;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  padding: 0.12rem 0.2rem;
+  border-radius: 4px;
+  text-align: left;
+}
+.comp-btn:hover, .rb-btn:hover:not(:disabled) { background: var(--surface-2); }
+.comp-btn:focus-visible, .rb-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.rb-btn:disabled { cursor: default; opacity: 0.6; }
+
+/* Active state matches the yellow trace drawn on the map, so the link is obvious. */
+.comp-active { background: color-mix(in srgb, #facc15 16%, transparent); }
+.comp-active .comp-label, .comp-active .comp-val { color: #facc15; }
+.comp-active .comp-bar > span { background: #facc15; }
+.rb-active { background: color-mix(in srgb, var(--accent) 16%, transparent); }
+.rb-active .rb-name { color: var(--accent); }

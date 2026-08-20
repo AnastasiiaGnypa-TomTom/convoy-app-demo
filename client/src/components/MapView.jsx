@@ -69,6 +69,9 @@ import {
   setRouteStructures,
   findRouteStructures,
   routeStructuresToGeoJSON,
+  ensureTypeHighlightLayers,
+  setTypeHighlight,
+  raiseTypeHighlightLayers,
 } from '../lib/roadStructures.js';
 
 /**
@@ -99,6 +102,7 @@ export default function MapView({
   poiOn,
   highlightedPoiLayer,
   highlightedStructure,
+  highlightedRoadType,
   goTo,
   fitBounds,
   structuresOn,
@@ -641,6 +645,37 @@ export default function MapView({
     }
     return () => cancelPulse();
   }, [highlightedStructure, ready, routeStructureLines]);
+
+  /*
+   * ux-highlight: trace one road type along the route.
+   *
+   * Uses the section index ranges the server measured the percentages from, so the
+   * highlight and the number can never disagree. No camera move: a type covering 90% of
+   * the route has nothing sensible to fly to.
+   */
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !ready) return;
+    const apply = () => {
+      try {
+        ensureTypeHighlightLayers(map);
+        const feature = routeData?.routes?.features?.find(
+          (f) => f.properties.index === (selectedIndex ?? 0),
+        );
+        setTypeHighlight(
+          map,
+          feature?.geometry?.coordinates,
+          highlightedRoadType?.sections || null,
+        );
+        raiseTypeHighlightLayers(map);
+      } catch (err) {
+        console.warn('[type highlight]', err.message);
+      }
+    };
+    apply();
+    map.on('styledata', apply);
+    return () => map.off('styledata', apply);
+  }, [ready, highlightedRoadType, routeData, selectedIndex]);
 
   /* ------------------------------------- "show me these" fit + highlight */
   useEffect(() => {

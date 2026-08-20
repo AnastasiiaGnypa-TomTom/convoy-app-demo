@@ -125,6 +125,10 @@ export default function Sidebar({
   composition,
   roundabouts, // task 9
   onPrint, // task 10a
+  // ux-highlight
+  onSelectRoadType,
+  highlightedRoadTypeId,
+  onSelectRoundabout,
   // ux
   missionPlanned,
   openPanels,
@@ -497,17 +501,33 @@ export default function Sidebar({
                 disabled={!composition?.types?.length}
               >
                 <ul className="comp-list">
-                  {(composition?.types || []).map((t) => (
-                    <li key={t.type} className="comp-row">
-                      <span className="comp-label">{t.label}</span>
-                      <span className="comp-bar" aria-hidden="true">
-                        <span style={{ width: `${Math.min(100, t.percent)}%` }} />
-                      </span>
-                      <span className="comp-val">
-                        {t.percent}% · {(t.meters / 1000).toFixed(1)} km
-                      </span>
-                    </li>
-                  ))}
+                  {(composition?.types || []).map((t) => {
+                    const on = highlightedRoadTypeId === t.type;
+                    return (
+                      <li key={t.type}>
+                        {/*
+                          * ux-highlight: a button, so keyboard and screen readers get the
+                          * same behaviour. aria-pressed carries the on/off state, since the
+                          * highlight is a toggle rather than a jump.
+                          */}
+                        <button
+                          type="button"
+                          className={`comp-row comp-btn ${on ? 'comp-active' : ''}`}
+                          onClick={() => onSelectRoadType?.(t)}
+                          aria-pressed={on}
+                          title={on ? 'Hide this on the map' : 'Trace this on the map'}
+                        >
+                          <span className="comp-label">{t.label}</span>
+                          <span className="comp-bar" aria-hidden="true">
+                            <span style={{ width: `${Math.min(100, t.percent)}%` }} />
+                          </span>
+                          <span className="comp-val">
+                            {t.percent}% · {(t.meters / 1000).toFixed(1)} km
+                          </span>
+                        </button>
+                      </li>
+                    );
+                  })}
                 </ul>
                 {composition?.unreported?.length > 0 && (
                   <p className="comp-note">None on this route: {composition.unreported.join(', ')}.</p>
@@ -526,17 +546,39 @@ export default function Sidebar({
               >
                 {roundabouts?.count ? (
                   <ul className="rb-list">
-                    {roundabouts.items.map((r, i) => (
-                      <li key={`${r.distanceMeters}-${i}`} className="rb-row">
-                        <span className="rb-at">
-                          {r.distanceMeters < 1000
-                            ? `${Math.round(r.distanceMeters / 10) * 10} m`
-                            : `${(r.distanceMeters / 1000).toFixed(1)} km`}
-                        </span>
-                        <span className="rb-name">{r.street || 'Roundabout'}</span>
-                        {r.exit != null && <span className="rb-exit">exit {r.exit}</span>}
-                      </li>
-                    ))}
+                    {roundabouts.items.map((r, i) => {
+                      const key = `rb-${Math.round(r.distanceMeters || 0)}-${i}`;
+                      const isActive = highlightedStructureKey === key;
+                      // A roundabout with no coordinate cannot be centred, so it stays
+                      // plain text rather than a button that would do nothing.
+                      const clickable = r.lat != null && r.lon != null;
+                      return (
+                        <li key={key}>
+                          <button
+                            type="button"
+                            className={`rb-row rb-btn ${isActive ? 'rb-active' : ''}`}
+                            onClick={() => onSelectRoundabout?.(r, key)}
+                            disabled={!clickable}
+                            aria-pressed={isActive}
+                            title={
+                              !clickable
+                                ? 'No coordinate for this roundabout'
+                                : isActive
+                                  ? 'Clear the marker'
+                                  : 'Show this on the map'
+                            }
+                          >
+                            <span className="rb-at">
+                              {r.distanceMeters < 1000
+                                ? `${Math.round(r.distanceMeters / 10) * 10} m`
+                                : `${(r.distanceMeters / 1000).toFixed(1)} km`}
+                            </span>
+                            <span className="rb-name">{r.street || 'Roundabout'}</span>
+                            {r.exit != null && <span className="rb-exit">exit {r.exit}</span>}
+                          </button>
+                        </li>
+                      );
+                    })}
                   </ul>
                 ) : (
                   <p className="comp-note">None on this route.</p>

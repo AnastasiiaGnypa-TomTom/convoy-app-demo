@@ -104,6 +104,9 @@ function roundabouts(route) {
     .filter((i) => /ROUNDABOUT/i.test(i.maneuver || ''))
     .map((i) => ({
       distanceMeters: i.routeOffsetInMeters ?? null,
+      // ux-highlight: needed to centre the map on it, same as a bridge or tunnel.
+      lat: i.point?.latitude ?? i.point?.lat ?? null,
+      lon: i.point?.longitude ?? i.point?.lon ?? null,
       street: i.street || i.roadNumbers?.[0] || null,
       exit: i.roundaboutExitNumber ?? null,
       direction: /LEFT/i.test(i.maneuver) ? 'left' : 'right',
@@ -201,6 +204,7 @@ function composition(route, coordinates) {
   const total = cum[cum.length - 1] || 0;
 
   const metres = {};
+  const ranges = {};
   for (const sec of route.sections || []) {
     const type = sec.sectionType;
     if (!TYPES[type]) continue; // TRAFFIC and anything unknown are not road types
@@ -208,12 +212,16 @@ function composition(route, coordinates) {
     const b = Math.max(0, Math.min(cum.length - 1, Number(sec.endPointIndex) || 0));
     if (b <= a) continue;
     metres[type] = (metres[type] || 0) + (cum[b] - cum[a]);
+    (ranges[type] = ranges[type] || []).push([a, b]);
   }
 
   const present = Object.entries(metres)
     .map(([type, m]) => ({
       type,
       label: TYPES[type],
+      // ux-highlight: the point ranges, so clicking a row can draw exactly the stretches
+      // this figure was measured from. Without them the client would have to guess.
+      sections: ranges[type] || [],
       meters: Math.round(m),
       // Share of the route, which may exceed 100% across types because they overlap.
       percent: total > 0 ? Math.round((m / total) * 1000) / 10 : null,
