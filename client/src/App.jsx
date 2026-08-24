@@ -9,6 +9,7 @@ import ViewToggles from './components/ViewToggles.jsx';
 import NavigateView from './components/NavigateView.jsx';
 import ElevationProfile from './components/ElevationProfile.jsx';
 import PrintView from './components/PrintView.jsx'; // task 10a
+import { setDistanceUnits } from './lib/format.js'; // ux-units
 import TimeControl from './components/TimeControl.jsx';
 import RoutePanel from './components/RoutePanel.jsx';
 import {
@@ -1643,6 +1644,17 @@ export default function App() {
   // Vendor status of the basemap style (not the user's Map/Satellite choice).
   const basemapStatus = capabilities?.basemap;
   const usingFallback = basemapStatus && basemapStatus.active !== 'tomtom-orbis';
+
+  /*
+   * ux-units: miles for a US (or UK) route, kilometres otherwise.
+   *
+   * Set during RENDER, not in an effect: the format helpers read module state, and an
+   * effect runs after children have already drawn — which would flash one frame of the
+   * wrong unit on every new route. The server derives this from TomTom's COUNTRY
+   * sections (countryCode USA / NLD / CHE), so it follows the road the convoy is on
+   * rather than the browser's locale.
+   */
+  setDistanceUnits(routeData?.routes?.features?.[0]?.properties?.units || 'metric');
 
   const navMode = mode === 'navigate';
 

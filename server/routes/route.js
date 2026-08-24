@@ -161,6 +161,32 @@ function timeParams(departAt, arriveAt) {
   return {};
 }
 
+/* ─────────────────────── ux-units: miles or kilometres ─────────────────────── */
+
+/** Roads signed in miles. Canada and Mexico are metric, so "North America" is wrong. */
+const IMPERIAL = new Set(['USA', 'GBR', 'LBR', 'MMR']);
+
+/**
+ * Countries the route passes through, and the unit system that implies.
+ *
+ * The FIRST country wins for the unit, because that is where the convoy sets off and
+ * whose signage the driver reads first. A route crossing into a differently-signed
+ * country is reported in `countries` so the client could say so if it ever needs to.
+ */
+function countryInfo(route) {
+  const codes = [];
+  for (const sec of route.sections || []) {
+    if (sec.sectionType === 'COUNTRY' && sec.countryCode && !codes.includes(sec.countryCode)) {
+      codes.push(sec.countryCode);
+    }
+  }
+  return {
+    countries: codes,
+    units: codes.length && IMPERIAL.has(codes[0]) ? 'imperial' : 'metric',
+    mixed: codes.some((c) => IMPERIAL.has(c)) && codes.some((c) => !IMPERIAL.has(c)),
+  };
+}
+
 /* ─────────────────── task 7: road-type composition ──────────────────────── */
 
 /** Metres between two lon/lat pairs, planar approximation (fine at section scale). */
@@ -297,6 +323,9 @@ routeRouter.post('/', async (req, res, next) => {
      * return no sections when the route has none.
      */
     sectionType: [
+      // ux-units: gives countryCode per section (USA / NLD / CHE), which is what decides
+      // miles vs km. Cheaper and more reliable than reverse-geocoding an endpoint.
+      'country',
       'traffic',
       'motorway',
       'tollRoad',
@@ -359,6 +388,7 @@ routeRouter.post('/', async (req, res, next) => {
           trafficSections: trafficSections(r),
           composition: composition(r, coordinates), // task 7
           roundabouts: roundabouts(r), // task 9
+          ...countryInfo(r), // ux-units
           maneuvers: maneuvers(r),
           maneuverCount: (r.guidance?.instructions || []).length,
         },

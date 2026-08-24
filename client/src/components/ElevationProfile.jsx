@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { formatDistance } from '../lib/format.js';
+import { formatDistance, formatElevation } from '../lib/format.js';
 
 /**
  * Route elevation profile.
@@ -83,7 +83,7 @@ export default function ElevationProfile({ profile, vehicleLabel, gradeLimit, un
       <div className="section-head">
         <h2>Elevation profile</h2>
         <span className="elev-range">
-          {minElevation}–{maxElevation} m
+          {formatElevation(minElevation)}–{formatElevation(maxElevation)}
         </span>
       </div>
 
@@ -128,10 +128,10 @@ export default function ElevationProfile({ profile, vehicleLabel, gradeLimit, un
 
       <div className="elev-stats">
         <span className="elev-stat">
-          <em>↑</em> {profile.totalGain} m
+          <em>↑</em> {formatElevation(profile.totalGain)}
         </span>
         <span className="elev-stat">
-          <em>↓</em> {profile.totalLoss} m
+          <em>↓</em> {formatElevation(profile.totalLoss)}
         </span>
         <span className={`elev-stat ${overLimit ? 'elev-stat-warn' : ''}`}>
           <em>max</em> {Math.abs(profile.maxGrade)}%

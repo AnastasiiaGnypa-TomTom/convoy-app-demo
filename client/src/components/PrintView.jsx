@@ -1,4 +1,9 @@
-import { formatDistance, formatDuration, formatVehicleSpec } from '../lib/format.js';
+import {
+  formatDistance,
+  formatDistanceShort,
+  formatDuration,
+  formatVehicleSpec,
+} from '../lib/format.js';
 
 /*
  * task 10a: printable route output.
@@ -145,13 +150,13 @@ export default function PrintView({
                     <td>
                       {s.startDistance < 1000
                         ? `${Math.round(s.startDistance / 10) * 10} m`
-                        : `${(s.startDistance / 1000).toFixed(1)} km`}
+                        : formatDistanceShort(s.startDistance)}
                     </td>
                     <td>{s.kind === 'tunnel' ? 'Tunnel' : 'Bridge'}</td>
                     <td>{s.name || '—'}</td>
                     <td>
                       {s.lengthM > (s.resolutionM || 25) * 2
-                        ? `~${Math.round(s.lengthM / 50) * 50} m`
+                        ? `~${formatDistance(Math.round(s.lengthM / 50) * 50)}`
                         : '—'}
                     </td>
                   </tr>
@@ -177,7 +182,7 @@ export default function PrintView({
                   <tr key={t.type}>
                     <td>{t.label}</td>
                     <td>
-                      {t.percent}% · {(t.meters / 1000).toFixed(1)} km
+                      {t.percent}% · {formatDistanceShort(t.meters)}
                     </td>
                   </tr>
                 ))}
@@ -198,7 +203,7 @@ export default function PrintView({
                       <td>
                         {r.distanceMeters < 1000
                           ? `${Math.round(r.distanceMeters / 10) * 10} m`
-                          : `${(r.distanceMeters / 1000).toFixed(1)} km`}
+                          : formatDistanceShort(r.distanceMeters)}
                       </td>
                       <td>{r.street || 'Roundabout'}</td>
                       <td>{r.exit != null ? `exit ${r.exit}` : ''}</td>

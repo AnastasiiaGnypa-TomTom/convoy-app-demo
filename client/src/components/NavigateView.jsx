@@ -1,4 +1,4 @@
-import { formatDistance, formatDuration } from '../lib/format.js';
+import { formatDistance, formatDistanceShort, formatDuration } from '../lib/format.js';
 import { maneuverGlyph } from '../lib/navigation.js';
 
 /** Distance phrasing a driver expects: rounded coarse when far, precise when close. */
@@ -7,7 +7,7 @@ function formatManeuverDistance(m) {
   if (m < 30) return 'now';
   if (m < 500) return `${Math.round(m / 10) * 10} m`;
   if (m < 1000) return `${Math.round(m / 50) * 50} m`;
-  return `${(m / 1000).toFixed(1)} km`;
+  return formatDistanceShort(m);
 }
 
 const clock = (d) =>

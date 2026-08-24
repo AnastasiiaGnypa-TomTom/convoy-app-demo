@@ -2,7 +2,13 @@ import { useEffect, useRef, useState } from 'react';
 import Disclosure from './Disclosure.jsx'; // ux
 import PlaceInput from './PlaceInput.jsx';
 import ViewToggles from './ViewToggles.jsx';
-import { formatDelay, formatDistance, formatDuration, formatVehicleSpec } from '../lib/format.js';
+import {
+  formatDelay,
+  formatDistance,
+  formatDistanceShort,
+  formatDuration,
+  formatVehicleSpec,
+} from '../lib/format.js';
 import { END_COLOR, START_COLOR } from './RoutePanel.jsx';
 
 /**
@@ -394,14 +400,14 @@ export default function Sidebar({
                             <span className="rs-at">
                               {x.startDistance < 1000
                                 ? `${Math.round(x.startDistance / 10) * 10} m`
-                                : `${(x.startDistance / 1000).toFixed(1)} km`}
+                                : formatDistanceShort(x.startDistance)}
                               {/*
                                 * Length is only shown when it exceeds the detection
                                 * resolution, and is marked approximate. Reporting "122 m"
                                 * off a 25 m sampling step would be false precision.
                                 */}
                               {x.lengthM > (x.resolutionM || 25) * 2
-                                ? ` · ~${Math.round(x.lengthM / 50) * 50} m long`
+                                ? ` · ~${formatDistance(Math.round(x.lengthM / 50) * 50)} long`
                                 : ''}
                             </span>
                           </button>
@@ -599,7 +605,7 @@ export default function Sidebar({
                             <span style={{ width: `${Math.min(100, t.percent)}%` }} />
                           </span>
                           <span className="comp-val">
-                            {t.percent}% · {(t.meters / 1000).toFixed(1)} km
+                            {t.percent}% · {formatDistanceShort(t.meters)}
                           </span>
                         </button>
                       </li>
@@ -648,7 +654,7 @@ export default function Sidebar({
                             <span className="rb-at">
                               {r.distanceMeters < 1000
                                 ? `${Math.round(r.distanceMeters / 10) * 10} m`
-                                : `${(r.distanceMeters / 1000).toFixed(1)} km`}
+                                : formatDistanceShort(r.distanceMeters)}
                             </span>
                             <span className="rb-name">{r.street || 'Roundabout'}</span>
                             {r.exit != null && <span className="rb-exit">exit {r.exit}</span>}
