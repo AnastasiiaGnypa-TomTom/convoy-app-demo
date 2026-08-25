@@ -443,6 +443,32 @@ routeRouter.post('/', async (req, res, next) => {
 
 /* ─────────────── ux-insight: travel time by departure hour ───────────────── */
 
+/**
+ * Retry a rate-limited call.
+ *
+ * Routing had NO retry at all, which only became visible once the time-profile started
+ * firing six requests for one answer: measured 10 x HTTP 429 in a single session, and a
+ * limited hour was silently dropped so the comparison quietly showed five bars instead of
+ * six. A 429 is a "come back shortly", not a failure, so it is worth waiting out.
+ *
+ * Jitter matters here: six requests that all back off by the same amount collide again on
+ * the retry.
+ */
+const RATE_LIMIT_BACKOFF_MS = [400, 1100, 2400];
+
+async function withRateLimitRetry(fn) {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      const limited = err instanceof VendorError && err.vendorStatus === 429;
+      if (!limited || attempt >= RATE_LIMIT_BACKOFF_MS.length) throw err;
+      await new Promise((r) => setTimeout(r, RATE_LIMIT_BACKOFF_MS[attempt] + Math.random() * 250));
+    }
+  }
+}
+
+
 const timeProfileCache = createCache({ ttlMs: 10 * 60_000 });
 
 /** Hours sampled across the day. Six keeps the vendor cost sane and still shows the shape. */
@@ -495,9 +521,10 @@ routeRouter.post('/time-profile', async (req, res, next) => {
         departAt: at.toISOString().replace(/\.\d{3}Z$/, 'Z'),
         ...(sanitiseAvoid(avoid).length ? { avoid: sanitiseAvoid(avoid) } : {}),
       };
-      const json = await tomtomJson(
-        tomtomUrl(`${ROUTING_ENDPOINT.path}/${locations}/json`, params),
-        { timeoutMs: 12_000 },
+      const json = await withRateLimitRetry(() =>
+        tomtomJson(tomtomUrl(`${ROUTING_ENDPOINT.path}/${locations}/json`, params), {
+          timeoutMs: 12_000,
+        }),
       );
       const s = json.routes?.[0]?.summary;
       return {
@@ -509,7 +536,10 @@ routeRouter.post('/time-profile', async (req, res, next) => {
 
     // Sequential-ish: this is six calls for one answer, not a user-facing latency path.
     const settled = [];
-    for (const t of tasks) {
+    for (const [i, t] of tasks.entries()) {
+      // A small gap between hours: sequential alone still bursts, because each call
+      // returns in well under a second.
+      if (i > 0) await new Promise((r) => setTimeout(r, 120));
       try {
         settled.push(await t());
       } catch (err) {
