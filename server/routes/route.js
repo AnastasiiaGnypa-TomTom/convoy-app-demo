@@ -444,25 +444,43 @@ routeRouter.post('/', async (req, res, next) => {
 /* ─────────────── ux-insight: travel time by departure hour ───────────────── */
 
 /**
- * Retry a rate-limited call.
+ * Retry a call that failed for a reason worth waiting out.
  *
  * Routing had NO retry at all, which only became visible once the time-profile started
  * firing six requests for one answer: measured 10 x HTTP 429 in a single session, and a
  * limited hour was silently dropped so the comparison quietly showed five bars instead of
  * six. A 429 is a "come back shortly", not a failure, so it is worth waiting out.
  *
+ * A 429 is not the only transient cause, which the first version of this missed. Measured
+ * on Azure after deploying it: one hour of six still dropped, and the log line was
+ * "timed out after 12000ms" — a timeout, not a rate limit. tomtomFetch turns an abort into
+ * VendorError{status: 504} with NO vendorStatus, so the old 429-only test was false and it
+ * threw on the first attempt without retrying once. App Service sits further from the
+ * vendor than a laptop does, so the tail latency that never showed up locally is normal
+ * there. Vendor 5xx is included for the same reason: nothing about the request is wrong.
+ *
+ * A 4xx other than 429 is NOT retried — a rejected parameter fails identically every time,
+ * so retrying it just spends the vendor budget three more times to reach the same answer.
+ *
  * Jitter matters here: six requests that all back off by the same amount collide again on
  * the retry.
  */
 const RATE_LIMIT_BACKOFF_MS = [400, 1100, 2400];
+
+function isTransient(err) {
+  if (!(err instanceof VendorError)) return false;
+  if (err.vendorStatus === 429) return true;             // rate limited
+  if (err.vendorStatus >= 500) return true;              // vendor-side fault
+  if (err.vendorStatus === undefined && err.status === 504) return true; // timeout / network
+  return false;
+}
 
 async function withRateLimitRetry(fn) {
   for (let attempt = 0; ; attempt++) {
     try {
       return await fn();
     } catch (err) {
-      const limited = err instanceof VendorError && err.vendorStatus === 429;
-      if (!limited || attempt >= RATE_LIMIT_BACKOFF_MS.length) throw err;
+      if (!isTransient(err) || attempt >= RATE_LIMIT_BACKOFF_MS.length) throw err;
       await new Promise((r) => setTimeout(r, RATE_LIMIT_BACKOFF_MS[attempt] + Math.random() * 250));
     }
   }
@@ -522,8 +540,11 @@ routeRouter.post('/time-profile', async (req, res, next) => {
         ...(sanitiseAvoid(avoid).length ? { avoid: sanitiseAvoid(avoid) } : {}),
       };
       const json = await withRateLimitRetry(() =>
+        // 12s was tuned locally and proved too tight from App Service, where the same
+        // call sits further from the vendor. This is a background comparison, not a
+        // user-blocking path, so a longer ceiling costs nothing but a slower worst case.
         tomtomJson(tomtomUrl(`${ROUTING_ENDPOINT.path}/${locations}/json`, params), {
-          timeoutMs: 12_000,
+          timeoutMs: 20_000,
         }),
       );
       const s = json.routes?.[0]?.summary;
